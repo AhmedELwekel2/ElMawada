@@ -1,0 +1,27 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+sqlalchemy
+apscheduler
+pydantic[email]
+requests
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt==4.0.1
+python-multipart
+
+# Deps for the Family & Society bot (telegram_bot_family) imported by the backend
+feedparser
+beautifulsoup4
+newspaper3k
+readability-lxml
+lxml
+arabic-reshaper
+python-bidi
+nltk
+reportlab
+jinja2
+weasyprint
+pillow
+boto3>=1.34.0
+playwright

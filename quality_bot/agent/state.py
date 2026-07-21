@@ -15,7 +15,7 @@ class ReportState(TypedDict, total=False):
 
     # --- generated content ---
     blog_content: str                # daily markdown
-    combined_blog: Optional[str]     # weekly/monthly: single combined Hajj & Umrah report
+    combined_blog: Optional[str]     # weekly/monthly: single combined Family & Society report
     magazine_data: Optional[dict]    # magazine JSON
 
     # --- outputs ---

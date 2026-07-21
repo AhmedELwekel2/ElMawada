@@ -1,6 +1,8 @@
-# Hajj & Umrah News Agent
+# Family & Society News Agent (الأسرة والمجتمع)
 
-An Arabic news agent for Hajj & Umrah. It scrapes news (haj.gov.sa + CNN Arabic), runs a LangGraph
+An Arabic news agent for family & society topics. It scrapes news from Saudi & international sources
+(X/Twitter via the Twitter API v2, RSS/Atom feeds, and gov/institutional sites — some JS-rendered via
+Playwright), runs a LangGraph
 pipeline to generate Modern Standard Arabic reports (daily / weekly / monthly blogs + a monthly
 magazine), renders them to PDF, and exposes them two ways: a **FastAPI** HTTP API and a **Telegram**
 bot.
@@ -22,7 +24,7 @@ python -m agent.bot
 
 Configure credentials in `quality_bot/.env` (copy from `.env.example`): `TELEGRAM_TOKEN`, the AWS
 Bedrock keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_BEDROCK_INFERENCE_PROFILE_ID`),
-and the news API keys. `.env` is gitignored.
+the `TWITTER_BEARER_TOKEN`, and other keys. `.env` is gitignored.
 
 ### Docker
 
@@ -30,7 +32,7 @@ Build from the **repo root** (not `quality_bot/`), since the domain module and t
 there:
 
 ```bash
-docker build -t hajj-bot .
+docker build -t family-bot .
 ./deploy_vps.sh        # builds + runs, passing secrets via --env-file
 ```
 
@@ -47,12 +49,13 @@ Full endpoint reference for frontend developers is in [`quality_bot/API_README.m
 
 The codebase is split across two locations, and the split is load-bearing:
 
-- **`telegram_bot_hajj.py`** (repo root) — self-contained domain logic: scrapers, recency filter,
+- **`telegram_bot_family.py`** (repo root) — self-contained domain logic: the source registry +
+  `fetch_family_news` (Twitter/X + RSS + static HTML + Playwright JS sites), recency filter,
   content extraction, categorization, ReportLab + WeasyPrint PDF rendering, usage limits, Arabic
   prompt/keyword helpers, and the Telegram command handlers. It imports no local modules.
 - **`quality_bot/agent/`** — the LangGraph + FastAPI layer that orchestrates that logic.
 
-`agent/_legacy.py` is the bridge: it puts the repo root on `sys.path`, imports `telegram_bot_hajj`,
+`agent/_legacy.py` is the bridge: it puts the repo root on `sys.path`, imports `telegram_bot_family`,
 and re-exports its functions under stable names. All domain calls in the agent go through `_legacy`
 (aliased `L`).
 
@@ -87,15 +90,15 @@ provider config in `agent/config.py` (read from env at import).
 - `agent/api.py` — FastAPI (CORS open for dev; generated PDFs saved under `quality_bot/generated/`
   and served at `/files`).
 - `agent/bot.py` — Telegram. Intercepts the four LLM actions to drive the graphs; delegates all
-  other handlers (menu, categories, keywords, usage, pagination) to `telegram_bot_hajj` unchanged.
+  other handlers (menu, categories, keywords, usage, pagination) to `telegram_bot_family` unchanged.
 
 ## Gotchas
 
-- **Working directory matters.** `telegram_bot_hajj.py` registers the Amiri font with a CWD-relative
+- **Working directory matters.** `telegram_bot_family.py` registers the Amiri font with a CWD-relative
   path, so run from `quality_bot/` (which has `Amiri-Regular.ttf`). But it resolves `templates/`
   relative to its own file location (the repo root), so the templates and font also exist at the
   repo root. Both copies are intentional — keep them in sync.
-- **Env-load ordering.** `telegram_bot_hajj` requires `AWS_BEARER_TOKEN_BEDROCK` at import, and
+- **Env-load ordering.** `telegram_bot_family` requires `AWS_BEARER_TOKEN_BEDROCK` at import, and
   `agent/config.py` reads env at import. `agent/__init__.py` calls `load_dotenv()` first so this
   works regardless of CWD or launcher (uvicorn). If `config.HAS_BEDROCK` is unexpectedly `False`,
   an import-ordering regression is the likely cause.

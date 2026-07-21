@@ -1,19 +1,18 @@
 """System/user prompt builders for the generation nodes.
 
-Ported verbatim from the Hajj & Umrah generation functions
-(``generate_daily_hajj_blog_with_ai``, ``generate_hajj_blog_with_ai``,
-``generate_magazine_content_with_ai``) so output quality, Arabic formatting,
-and identity are unchanged; only the LLM transport differs (LangChain).
+Ported from the original generation functions and re-themed for the
+**Family & Society** (الأسرة والمجتمع) identity so output quality, Arabic
+formatting, and section structure are preserved; only the topic/voice changes.
 Each builder returns ``(system_message, user_prompt)``.
 """
 from ._legacy import build_keyword_instruction_block
 
-# Daily category filter values surfaced by the Hajj categorizer.
-HAJJ_CATEGORIES = (
-    "خدمات الحجاج",
-    "التنظيم والإدارة",
-    "التقنية والابتكار",
-    "الصحة والسلامة",
+# Daily category filter values surfaced by the Family & Society categorizer.
+FAMILY_CATEGORIES = (
+    "الأسرة والطفولة",
+    "الصحة والرفاهية",
+    "المجتمع والقطاع غير الربحي",
+    "الإحصاء والدراسات",
     "أخبار عامة",
 )
 
@@ -50,14 +49,15 @@ def daily_blog(articles, category=None, keywords=None):
     max_daily_articles = min(len(articles), 40)
     news_content = _articles_block(articles, max_daily_articles, 450)
 
-    if category in HAJJ_CATEGORIES:
+    if category in FAMILY_CATEGORIES:
         intro_target = f"أهم تطورات {category} اليوم"
     else:
-        intro_target = "أهم تطورات الحج والعمرة اليوم"
+        intro_target = "أهم أخبار الأسرة والمجتمع اليوم"
 
     system_message = (
         "You are a professional Arabic writer. "
-        "You write concise, structured daily blog reports about Hajj, Umrah, and pilgrimage news in MODERN STANDARD ARABIC. "
+        "You write concise, structured daily blog reports about family, parenting, social wellbeing, "
+        "and community affairs in MODERN STANDARD ARABIC. "
         "All visible content, headings, and paragraphs must be in Arabic, but you may read/analyze English source text. "
         "Keep the style صحفي احترافي وسهل القراءة، واستخدم عناوين Markdown."
     )
@@ -73,26 +73,26 @@ def daily_blog(articles, category=None, keywords=None):
 # [اكتب عنوانًا عربيًا جذابًا لليوم]
 
 ## نظرة سريعة
-[فقرة من 80–120 كلمة تلخص أهم محاور اليوم والعناوين الرئيسية في أخبار الحج والعمرة]
+[فقرة من 80–120 كلمة تلخص أهم محاور اليوم والعناوين الرئيسية في أخبار الأسرة والمجتمع]
 
 ## أبرز الأخبار
-[2-3 فقرات قصيرة، كل منها 80–120 كلمة، تربط بين أهم التحديثات في مجال الحج والعمرة]
+[2-3 فقرات قصيرة، كل منها 80–120 كلمة، تربط بين أهم التحديثات في شؤون الأسرة والمجتمع]
 
 ## تطورات لافتة
-[قائمة نقطية من 6–8 عناصر مختصرة، كل عنصر 1–2 جملة، تشير إلى شركات أو معايير أو نتائج محددة]
+[قائمة نقطية من 6–8 عناصر مختصرة، كل عنصر 1–2 جملة، تشير إلى جهات أو مبادرات أو دراسات أو أرقام محددة]
 
-## السوق والتأثير
-[1–2 فقرة عن تأثير الأخبار على قطاع الحج والعمرة والصناعة]
+## الأثر المجتمعي
+[1–2 فقرة عن تأثير الأخبار على الأسرة والمجتمع وجودة الحياة]
 
 ## ما الذي نترقبه لاحقًا
-[3–5 نقاط حول الإعلانات المتوقعة أو الاتجاهات في مجال الحج والعمرة الصاعدة]
+[3–5 نقاط حول المبادرات المتوقعة أو الاتجاهات الصاعدة في مجال الأسرة والمجتمع]
 
 متطلبات أساسية:
 - استخدم عناوين الأقسام العربية أعلاه كما هي مع تنسيق Markdown (##).
 - امزج المعلومات من عدة مقالات، ولا تكتفِ بسردها واحدة تلو الأخرى.
-- اذكر الأسماء والأرقام والمعايير والمنظمات كلما أمكن ذلك.
-- اجعل الأسلوب صحفيًا احترافيًا وواضحًا، مناسبًا لتقرير يومي عن الحج والعمرة.
-- ركّز دائمًا على صلة المحتوى بمجال الحج والعمرة.
+- اذكر الأسماء والأرقام والدراسات والجهات والمنظمات كلما أمكن ذلك.
+- اجعل الأسلوب صحفيًا احترافيًا وواضحًا، مناسبًا لتقرير يومي عن الأسرة والمجتمع.
+- ركّز دائمًا على صلة المحتوى بشؤون الأسرة والمجتمع وجودة الحياة.
 
 مقالات للتحليل ({max_daily_articles} مقالاً):
 {news_content}
@@ -109,33 +109,34 @@ def periodic_blog(articles, blog_theme="combined", time_period="weekly", keyword
     period_next = "الأسبوع القادم" if time_period == "weekly" else "الشهر القادم"
 
     if blog_theme == "management":
-        blog_focus = "خدمات الحجاج والتنظيم"
+        blog_focus = "الأسرة والمجتمع والقطاع غير الربحي"
         blog_angle = (
-            "ركّز على تطورات خدمات الحجاج، والتنظيم، والاستعدادات، "
-            "والتشريعات والسياسات المتعلقة بالحج والعمرة، والتطورات في قطاع الحج. "
-            "الجمهور المستهدف هو المسؤولون عن الحج والعمرة، والمنظمون، والمهتمون بالقطاع. "
-            "أبرز استراتيجيات خدمة الحجاج، والتطوير، والشراكات، والابتكارات في القطاع."
+            "ركّز على تطورات شؤون الأسرة والطفولة، والمبادرات المجتمعية، والعمل التطوعي، "
+            "والسياسات والبرامج المتعلقة بالأسرة والمجتمع. "
+            "الجمهور المستهدف هو صنّاع القرار في الشأن الأسري، والجهات المجتمعية، والمهتمون بالقطاع. "
+            "أبرز البرامج والشراكات والمبادرات والممارسات الملهمة في خدمة الأسرة والمجتمع."
         )
     elif blog_theme == "combined":
-        blog_focus = "أخبار الحج والعمرة الشاملة"
+        blog_focus = "أخبار الأسرة والمجتمع الشاملة"
         blog_angle = (
-            "ركّز على كافة جوانب الحج والعمرة بما في ذلك خدمات الحجاج، التنظيم الإداري، التقنية والابتكار، "
-            "والتطورات الصحية والأمنية. "
-            "الجمهور المستهدف هو المتابعون الشاملون لقطاع الحج والعمرة والمهتمون بجميع مستجداته. "
-            "أبرز أهم الأخبار والقرارات والتطورات التكنولوجية والتنظيمية في القطاع."
+            "ركّز على كافة جوانب الأسرة والمجتمع بما في ذلك الأسرة والطفولة، الصحة والرفاهية، "
+            "المجتمع والقطاع غير الربحي، والإحصاءات والدراسات. "
+            "الجمهور المستهدف هو المتابعون الشاملون لشؤون الأسرة والمجتمع والمهتمون بجميع مستجداتها. "
+            "أبرز أهم الأخبار والقرارات والدراسات والمبادرات المجتمعية."
         )
     else:  # improvement
-        blog_focus = "التقنية والصحة والابتكار في الحج"
+        blog_focus = "الصحة والرفاهية وجودة الحياة"
         blog_angle = (
-            "ركّز على التقنية والابتكار والتحول الرقمي في خدمة الحجاج والمعتمرين، "
-            "والخدمات الصحية والسلامة والأمن خلال موسم الحج، والمبادرات التطويرية. "
-            "الجمهور المستهدف هو المهتمون بتطوير خدمات الحج، والمنظّمون، ومزودو الخدمات. "
-            "أبرز الاتجاهات الصاعدة، والابتكارات، وأفضل الممارسات في خدمة ضيوف الرحمن."
+            "ركّز على الصحة النفسية والبدنية، والتغذية، وجودة الحياة الأسرية، "
+            "والدراسات والإحصاءات الداعمة، والمبادرات التطويرية. "
+            "الجمهور المستهدف هو المهتمون برفاهية الأسرة، ومقدمو الخدمات المجتمعية. "
+            "أبرز الاتجاهات الصاعدة، والدراسات الحديثة، وأفضل الممارسات في رعاية الأسرة."
         )
 
     system_message = (
-        "You are a professional Arabic Hajj and Umrah industry blogger. "
-        "You always write engaging, insightful blog posts in MODERN STANDARD ARABIC about Hajj, Umrah, and pilgrimage developments. "
+        "You are a professional Arabic family & society blogger. "
+        "You always write engaging, insightful blog posts in MODERN STANDARD ARABIC about family, parenting, "
+        "social wellbeing, the nonprofit sector, and quality-of-life developments. "
         "Use clear structure, strong headings in Arabic, and actionable insights. "
         "Always use proper markdown formatting for headers, and keep the tone صحفي احترافي وجذّاب."
     )
@@ -154,7 +155,7 @@ def periodic_blog(articles, blog_theme="combined", time_period="weekly", keyword
     [مقدمة مشوّقة من 150 كلمة تقريبًا تجذب القارئ وتشرح سياق التقرير]
 
     ## أهم قصة في {period_cap}
-    [250–300 كلمة تغطي التطور الأهم في أخبار الحج والعمرة لهذا {period_cap}]
+    [250–300 كلمة تغطي التطور الأهم في أخبار الأسرة والمجتمع لهذا {period_cap}]
 
     ## تطور رئيسي ثانٍ
     [250–300 كلمة عن ثاني أهم تطور]
@@ -162,14 +163,14 @@ def periodic_blog(articles, blog_theme="combined", time_period="weekly", keyword
     ## اتجاهات بارزة
     [200–250 كلمة عن أبرز الاتجاهات والأنماط الملحوظة]
 
-    ## تركيز على معيار أو قطاع
-    [200–250 كلمة تبرز معايير أو شركات أو قطاعات محددة]
+    ## تركيز على مبادرة أو دراسة
+    [200–250 كلمة تبرز مبادرات أو جهات أو دراسات محددة]
 
     ## ملخصات سريعة
     [200–250 كلمة تغطي 6–8 تطورات إضافية بشكل موجز]
 
-    ## مراقبة السوق
-    [150–200 كلمة عن الاستثمارات، الشراكات، وأخبار الأعمال في مجال الحج والعمرة]
+    ## مرصد المجتمع
+    [150–200 كلمة عن البرامج، الشراكات، والمبادرات المجتمعية]
 
     ## ما الذي ينتظرنا لاحقًا
     [100–150 كلمة تستشرف ما قد يحدث في {period_next}]
@@ -183,9 +184,9 @@ def periodic_blog(articles, blog_theme="combined", time_period="weekly", keyword
     متطلبات أساسية:
     - يجب استخدام عناوين الأقسام العربية أعلاه كما هي مع تنسيق Markdown (##).
     - استشهد بما لا يقل عن 15–20 مقالًا مختلفًا داخل التدوينة.
-    - اذكر أسماء الشركات، المعايير، الأرقام، التواريخ، والمصادر كلما أمكن.
+    - اذكر أسماء الجهات، الدراسات، الأرقام، التواريخ، والمصادر كلما أمكن.
     - اجعل الأسلوب عربيًا صحفيًا مهنيًا وجذابًا.
-    - اجعل كل قسم غنيًا بالمعلومات وقابلًا للاستخدام لخبراء الحج والعمرة.
+    - اجعل كل قسم غنيًا بالمعلومات وقابلًا للاستخدام للمهتمين بشؤون الأسرة والمجتمع.
     - أمامك {article_count} مقالًا، فاستخدم هذا التنوع في بناء الصورة الكلية.
 
     محتوى المقالات للتحليل ({article_count} مقالاً):
@@ -197,7 +198,7 @@ def periodic_blog(articles, blog_theme="combined", time_period="weekly", keyword
 
 
 def magazine(articles):
-    """Build the monthly Hajj & Umrah magazine prompt.
+    """Build the monthly Family & Society magazine prompt.
 
     ``articles`` should be the same ``articles[:40]`` list the node uses to
     rebuild the ``article_index → article`` map for image back-filling, so the
@@ -224,7 +225,7 @@ def magazine(articles):
         )
 
     system_message = (
-        "You are the Editor-in-Chief of a professional monthly Hajj and Umrah report. "
+        "You are the Editor-in-Chief of a professional monthly Family & Society report. "
         "Your goal is to maintain a professional, insightful, and visionary tone. "
         "Critical page layout rule: Each article (including the first one) must fit exactly on one A4 page. "
         "NO EXCEPTIONS - All 8 articles must be between 300-350 words TOTAL (Lead + Main Content). "
@@ -239,12 +240,12 @@ def magazine(articles):
     )
 
     user_prompt = f"""
-    أنشئ محتوى مجلة الحج والعمرة الشهرية بناءً على هذه المقالات:
+    أنشئ محتوى مجلة الأسرة والمجتمع الشهرية بناءً على هذه المقالات:
     {articles_context}
 
     أعد كائن JSON بهذه البنية بالضبط (بدون markdown، فقط JSON):
     {{
-        "title": "تقرير الحج والعمرة: [عنوان جذاب بالعربية]",
+        "title": "مجلة الأسرة والمجتمع: [عنوان جذاب بالعربية]",
         "subtitle": "[عنوان فرعي جذاب بالعربية]",
         "date": "[الشهر والسنة الحاليين بالعربية]",
         "highlights": [
@@ -252,12 +253,12 @@ def magazine(articles):
             {{"title": "[عنوان 2 بالعربية]", "description": "[وصف قصير بالعربية]"}},
             {{"title": "[عنوان 3 بالعربية]", "description": "[وصف قصير بالعربية]"}}
         ],
-        "editors_note": "[حد أقصى 150 كلمة بالعربية. تعليق تحريري مهني وبصيرة حول أخبار الحج والعمرة.]",
+        "editors_note": "[حد أقصى 150 كلمة بالعربية. تعليق تحريري مهني وبصيرة حول أخبار الأسرة والمجتمع.]",
         "articles": [
             {{
-                "category": "[واحدة من: خدمات الحجاج, التقنية, الصحة والسلامة, التنظيم والإدارة]",
+                "category": "[واحدة من: الأسرة والطفولة, الصحة والرفاهية, المجتمع والقطاع غير الربحي, الإحصاء والدراسات]",
                 "title": "[عنوان مجلة جذاب بالعربية]",
-                "location": "[الموقع/المنطقة بالعربية، مثال: مكة المكرمة / السعودية]",
+                "location": "[الموقع/المنطقة بالعربية، مثال: السعودية / الرياض]",
                 "lead": "[فقرة افتتاحية جذابة بالعربية، 2-3 جمل (حوالي 40-50 كلمة). عدد الكلمات هذا مشمول في إجمالي 300-350.]",
                 "content": "[المحتوى الرئيسي بتنسيق HTML بالعربية مع عناوين فرعية <h3> وفقرات <p>. عدد الكلمات الإجمالي (الافتتاحية + المحتوى) يجب أن يكون 300-350 كلمة بالضبط. المحتوى الرئيسي 250-300 كلمة. أنشئ 3-4 فقرات (حوالي 80 كلمة لكل منها) مع عنوانين فرعيين.]",
                 "article_index": "[رقم المقال الأصلي من القائمة أعلاه، مثلاً 3 أو 7]",

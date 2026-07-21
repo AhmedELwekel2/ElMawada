@@ -1,0 +1,14 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="مركز المودة">
+  <title>مركز المودة</title>
+  <!-- Four interlocking figures (heads + hooked arms) forming a teal pinwheel -->
+  <defs>
+    <g id="mawadda-fig">
+      <circle cx="32" cy="10.5" r="4.7" fill="currentColor"/>
+      <path d="M32 16 C 32 25, 27.5 28.5, 21.5 31" fill="none" stroke="currentColor" stroke-width="6.6" stroke-linecap="round"/>
+    </g>
+  </defs>
+  <g color="#34C1C7"><use href="#mawadda-fig"/></g>
+  <g color="#2A9BA0"><use href="#mawadda-fig" transform="rotate(90 32 32)"/></g>
+  <g color="#34C1C7"><use href="#mawadda-fig" transform="rotate(180 32 32)"/></g>
+  <g color="#2A9BA0"><use href="#mawadda-fig" transform="rotate(270 32 32)"/></g>
+</svg>

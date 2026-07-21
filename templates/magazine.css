@@ -16,7 +16,7 @@
     margin: 2.2cm 1.5cm 2cm 1.5cm;
 
     @bottom-center {
-        content: "IBDL Monthly Report • " counter(page);
+        content: "مركز المودة — التقرير الشهري • " counter(page);
         font-family: 'Inter', sans-serif;
         font-size: 8pt;
         color: #94a3b8;
@@ -247,7 +247,7 @@ p {
     margin-bottom: 15px;
 }
 
-/* IBDL logo on cover */
+/* مركز المودة logo on cover */
 .cover-content-center {
     display: flex;
     flex-direction: column;
@@ -294,7 +294,7 @@ p {
     font-family: 'Inter', sans-serif;
 }
 
-/* Per-page IBDL logo — sits at top of page content as a header band */
+/* Per-page مركز المودة logo — sits at top of page content as a header band */
 .page-logo {
     text-align: right;
     margin: -0.5cm 0 0.5cm 0;
@@ -308,7 +308,7 @@ p {
     opacity: 0.9;
 }
 
-/* Fallback when no article image is available — show IBDL logo centered */
+/* Fallback when no article image is available — show مركز المودة logo centered */
 .featured-image-fallback {
     background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%) !important;
     display: flex !important;

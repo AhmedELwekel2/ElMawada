@@ -1,4 +1,4 @@
-"""FastAPI test harness for the Hajj & Umrah LangGraph agent.
+"""FastAPI test harness for the Family & Society LangGraph agent.
 
 Exposes the four report pipelines (daily / weekly / monthly / magazine) as HTTP
 endpoints that drive the compiled graphs directly — bypassing Telegram and the
@@ -46,8 +46,8 @@ GENERATED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 os.makedirs(GENERATED_DIR, exist_ok=True)
 
 app = FastAPI(
-    title="Hajj & Umrah News Agent API",
-    description="Test harness for the LangGraph-powered Hajj & Umrah report agent.",
+    title="Family & Society News Agent API",
+    description="Test harness for the LangGraph-powered Family & Society report agent.",
     version="1.0.0",
 )
 
@@ -71,7 +71,7 @@ app.mount("/files", StaticFiles(directory=GENERATED_DIR), name="files")
 # Request models
 # --------------------------------------------------------------------------- #
 class DailyRequest(BaseModel):
-    category: Optional[str] = None          # e.g. "خدمات الحجاج" | "التقنية والابتكار"
+    category: Optional[str] = None          # e.g. "الأسرة والطفولة" | "الصحة والرفاهية"
     keywords: Optional[Dict[str, Any]] = None
 
 
@@ -203,15 +203,15 @@ def _normalize_article(a: dict) -> dict:
 
 
 async def _news_listing(period: str, days: int, category: Optional[str], limit: int) -> dict:
-    raw = await asyncio.gather(
-        asyncio.to_thread(L.fetch_hajgov_news),
-        asyncio.to_thread(L.fetch_cnn_hajj_news),
-    )
-    articles = (raw[0] or []) + (raw[1] or [])
+    articles = await asyncio.to_thread(L.fetch_family_news) or []
 
     recent = await asyncio.to_thread(lambda: L.filter_recent_articles(articles, days=days) or [])
     if not recent:
         recent = articles  # fallback: show whatever was fetched
+
+    # Narrow to the psychological family/society focus (keep recency set if empty).
+    relevant = await asyncio.to_thread(lambda: L.filter_relevant_articles(recent) or [])
+    recent = relevant or recent
 
     if category:
         cats = await asyncio.to_thread(L.categorize_articles, recent)
@@ -228,7 +228,7 @@ async def _news_listing(period: str, days: int, category: Optional[str], limit: 
     }
 
 
-@app.get("/news/daily", summary="List today's Hajj & Umrah news (no AI, no PDF)")
+@app.get("/news/daily", summary="List today's Family & Society news (no AI, no PDF)")
 async def news_daily(
     days: int = Query(1, ge=1, le=365),
     category: Optional[str] = Query(None),
@@ -237,7 +237,7 @@ async def news_daily(
     return await _news_listing("daily", days, category, limit)
 
 
-@app.get("/news/weekly", summary="List this week's Hajj & Umrah news (no AI, no PDF)")
+@app.get("/news/weekly", summary="List this week's Family & Society news (no AI, no PDF)")
 async def news_weekly(
     days: int = Query(7, ge=1, le=365),
     category: Optional[str] = Query(None),
@@ -246,7 +246,7 @@ async def news_weekly(
     return await _news_listing("weekly", days, category, limit)
 
 
-@app.get("/news/monthly", summary="List this month's Hajj & Umrah news (no AI, no PDF)")
+@app.get("/news/monthly", summary="List this month's Family & Society news (no AI, no PDF)")
 async def news_monthly(
     days: int = Query(30, ge=1, le=365),
     category: Optional[str] = Query(None),
@@ -255,7 +255,7 @@ async def news_monthly(
     return await _news_listing("monthly", days, category, limit)
 
 
-@app.post("/reports/daily", summary="Generate the daily Hajj & Umrah report")
+@app.post("/reports/daily", summary="Generate the daily Family & Society report")
 async def daily(
     request: Request,
     body: Optional[DailyRequest] = Body(default=None),
@@ -267,10 +267,10 @@ async def daily(
         "category": body.category,
         "keywords": body.keywords,
     })
-    return _respond(state, format, request, "Hajj_Daily_Report.pdf")
+    return _respond(state, format, request, "Family_Daily_Report.pdf")
 
 
-@app.post("/reports/weekly", summary="Generate the weekly combined Hajj & Umrah report")
+@app.post("/reports/weekly", summary="Generate the weekly combined Family & Society report")
 async def weekly(
     request: Request,
     body: Optional[PeriodicRequest] = Body(default=None),
@@ -282,10 +282,10 @@ async def weekly(
         "time_period": "weekly",
         "keywords": body.keywords,
     })
-    return _respond(state, format, request, "Hajj_Weekly_Report.pdf")
+    return _respond(state, format, request, "Family_Weekly_Report.pdf")
 
 
-@app.post("/reports/monthly", summary="Generate the monthly combined Hajj & Umrah report")
+@app.post("/reports/monthly", summary="Generate the monthly combined Family & Society report")
 async def monthly(
     request: Request,
     body: Optional[PeriodicRequest] = Body(default=None),
@@ -297,10 +297,10 @@ async def monthly(
         "time_period": "monthly",
         "keywords": body.keywords,
     })
-    return _respond(state, format, request, "Hajj_Monthly_Report.pdf")
+    return _respond(state, format, request, "Family_Monthly_Report.pdf")
 
 
-@app.post("/reports/magazine", summary="Generate the monthly Hajj & Umrah magazine PDF")
+@app.post("/reports/magazine", summary="Generate the monthly Family & Society magazine PDF")
 async def magazine(
     request: Request,
     body: Optional[MagazineRequest] = Body(default=None),
@@ -311,7 +311,7 @@ async def magazine(
         "report_type": "magazine",
         "keywords": body.keywords,
     })
-    return _respond(state, format, request, "Hajj_Umrah_Magazine.pdf")
+    return _respond(state, format, request, "Family_Society_Magazine.pdf")
 
 
 def main():

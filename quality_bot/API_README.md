@@ -1,6 +1,6 @@
-# Hajj & Umrah News Agent — API Guide (for Frontend)
+# Family & Society News Agent — API Guide (for Frontend)
 
-REST API for the Hajj & Umrah news agent. It has two families of endpoints:
+REST API for the Family & Society news agent. It has two families of endpoints:
 
 1. **News listing** (`GET /news/...`) — fast, returns a JSON list of articles. No AI, no PDF. **~2 seconds.**
 2. **AI reports** (`POST /reports/...`) — runs the LLM pipeline and produces a PDF. **Slow: 1–6 minutes.**
@@ -73,7 +73,7 @@ GET /news/monthly
 | `limit` | int | `50` / `100` / `150` | Max articles to return (1–200) |
 
 **Categories** (Arabic values — pass URL-encoded):
-`خدمات الحجاج`, `التنظيم والإدارة`, `التقنية والابتكار`, `الصحة والسلامة`, `أخبار عامة`
+`الأسرة والطفولة`, `الصحة والرفاهية`, `المجتمع والقطاع غير الربحي`, `الإحصاء والدراسات`, `أخبار عامة`
 
 **Response shape**
 ```json
@@ -84,9 +84,9 @@ GET /news/monthly
   "count": 5,
   "articles": [
     {
-      "title": "وزارة الحج والعمرة تعلن تقويم موسم العمرة لعام 1448هـ",
-      "source": "وزارة الحج والعمرة",
-      "url": "https://haj.gov.sa/Media-Center/Ministry-News/2026/...",
+      "title": "مجلس شؤون الأسرة يطلق مبادرة لدعم الأسر المنتجة",
+      "source": "مجلس شؤون الأسرة (@FAC_SA)",
+      "url": "https://x.com/FAC_SA/status/...",
       "published_at": "2026-05-17T00:00:00Z",
       "description": "نص وصفي قصير ...",
       "image": null
@@ -100,7 +100,7 @@ GET /news/monthly
 | Field | Type | Notes |
 |-------|------|-------|
 | `title` | string | Headline (Arabic) |
-| `source` | string | e.g. `وزارة الحج والعمرة`, `CNN عربية` |
+| `source` | string | e.g. `مجلس شؤون الأسرة (@FAC_SA)`, `الأمم المتحدة`, `Our World in Data` |
 | `url` | string | Link to the original article |
 | `published_at` | string \| null | ISO 8601 date |
 | `description` | string \| null | Short summary |
@@ -110,7 +110,7 @@ GET /news/monthly
 ```bash
 curl "http://127.0.0.1:8010/news/daily"
 curl "http://127.0.0.1:8010/news/weekly?limit=10"
-curl "http://127.0.0.1:8010/news/monthly?category=التقنية والابتكار"
+curl "http://127.0.0.1:8010/news/monthly?category=الصحة والرفاهية"
 ```
 
 ---
@@ -128,7 +128,7 @@ POST /reports/magazine
 
 ```jsonc
 // /reports/daily
-{ "category": "التقنية والابتكار", "keywords": null }
+{ "category": "الصحة والرفاهية", "keywords": null }
 
 // /reports/weekly, /reports/monthly, /reports/magazine
 { "keywords": null }
@@ -159,8 +159,8 @@ POST /reports/daily?format=json
   "article_count": 10,
   "enhanced_count": 10,
   "kind": "combined",
-  "pdf_path": "C:\\...\\quality_bot\\generated\\Hajj_Monthly_Report_20260616_120000.pdf",
-  "download_url": "http://127.0.0.1:8010/files/Hajj_Monthly_Report_20260616_120000.pdf"
+  "pdf_path": "C:\\...\\quality_bot\\generated\\Family_Monthly_Report_20260616_120000.pdf",
+  "download_url": "http://127.0.0.1:8010/files/Family_Monthly_Report_20260616_120000.pdf"
 }
 ```
 → Use `download_url` directly in an `<a href>` or `<iframe>` to view/download the PDF.
@@ -172,7 +172,7 @@ POST /reports/daily?format=json
   "time_period": null,
   "enhanced_count": 20,
   "article_count": 20,
-  "blog_content": "# التقرير اليومي للحج والعمرة\n\n## نظرة سريعة\n...",
+  "blog_content": "# التقرير اليومي للأسرة والمجتمع\n\n## نظرة سريعة\n...",
   "combined_blog": null,
   "magazine_data": null,
   "outputs": [{ "kind": "daily" }]
@@ -190,14 +190,14 @@ Which content field is populated depends on the endpoint:
 **`magazine_data` structure**
 ```jsonc
 {
-  "title": "تقرير الحج والعمرة: ...",
+  "title": "مجلة الأسرة والمجتمع: ...",
   "subtitle": "...",
   "date": "June 2026",
   "highlights": [{ "title": "...", "description": "..." }],
   "editors_note": "...",
   "articles": [
     {
-      "category": "خدمات الحجاج",
+      "category": "الأسرة والطفولة",
       "title": "...",
       "location": "مكة المكرمة",
       "lead": "...",
@@ -243,7 +243,7 @@ renderMarkdown(data.blog_content); // e.g. with a markdown renderer (RTL/Arabic)
 const res = await fetch("http://127.0.0.1:8010/reports/daily", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ category: "الصحة والسلامة" }),
+  body: JSON.stringify({ category: "الصحة والرفاهية" }),
 });
 const data = await res.json();
 ```
@@ -265,7 +265,7 @@ window.open(url); // or set as <a download> href
 Errors use standard HTTP status codes with a JSON `detail` field.
 
 ```json
-{ "detail": "لم يتم العثور على أخبار حج وعمرة كافية." }
+{ "detail": "لم يتم العثور على أخبار كافية عن الأسرة والمجتمع." }
 ```
 
 | Status | Meaning |

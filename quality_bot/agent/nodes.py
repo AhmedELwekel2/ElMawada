@@ -6,10 +6,10 @@ thread via ``asyncio.to_thread`` so they never block the Telegram event loop;
 LLM generation uses the async LangChain layer. Every node sets ``progress`` so
 the Telegram layer can surface live status while streaming the graph.
 
-The domain pipeline mirrors the Hajj & Umrah bot (``telegram_bot_hajj``):
-sources are haj.gov.sa + CNN Arabic (already Hajj-specific, so no relevance
-filter — only recency), the periodic report is a single combined blog, and the
-magazine back-fills article images from the original sources.
+The domain pipeline mirrors the Family & Society bot (``telegram_bot_family``):
+sources are Twitter/X + RSS + gov/international sites (topically curated, so no
+relevance filter — only recency), the periodic report is a single combined blog,
+and the magazine back-fills article images from the original sources.
 """
 import asyncio
 import json
@@ -63,43 +63,62 @@ def _strip_seo_preamble(text: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Fetch  (haj.gov.sa + CNN Arabic)
+# Fetch  (Twitter/X + RSS + gov/international sites)
 # --------------------------------------------------------------------------- #
-async def _fetch_hajj_sources():
-    hajgov, cnn = await asyncio.gather(
-        asyncio.to_thread(L.fetch_hajgov_news),
-        asyncio.to_thread(L.fetch_cnn_hajj_news),
-    )
-    return (hajgov or []) + (cnn or [])
+async def _fetch_family_sources():
+    raw = await asyncio.to_thread(L.fetch_family_news)
+    return raw or []
 
 
 async def fetch_daily(state: ReportState) -> ReportState:
-    raw = await _fetch_hajj_sources()
+    raw = await _fetch_family_sources()
     logger.info("fetch_daily: %d articles", len(raw))
     return {
         "raw_articles": raw,
-        "progress": "🕋 *الخطوة 1/4:* جلب الأخبار من وزارة الحج و CNN عربية...",
+        "progress": "🌍 *الخطوة 1/4:* جلب الأخبار من المصادر الرسمية والدولية...",
     }
 
 
 async def fetch_periodic(state: ReportState) -> ReportState:
-    raw = await _fetch_hajj_sources()
+    raw = await _fetch_family_sources()
     logger.info("fetch_periodic: %d articles", len(raw))
     return {
         "raw_articles": raw,
-        "progress": "📝 *الخطوة 1/4:* جلب أخبار الحج والعمرة من المصادر...",
+        "progress": "📝 *الخطوة 1/4:* جلب أخبار الأسرة والمجتمع من المصادر...",
     }
 
 
 # --------------------------------------------------------------------------- #
-# Filter (recency only — the Hajj sources are already Hajj-specific)
+# Filter (recency only — the sources are already topically curated)
 # --------------------------------------------------------------------------- #
 def _recency_filter(raw, days):
     recent = L.filter_recent_articles(raw, days=days) or []
     if not recent:
         logger.warning("No articles within %d days — falling back to full set", days)
         recent = (raw or [])[:30]
-    return recent
+    # Order psych/family-relevant articles first so the enhancement budget
+    # prioritizes them, but keep the rest as spillover — the post-enhancement
+    # full-text pass (_focus, in enhance_*) re-checks each article's extracted
+    # body, so items that are on-topic in the body but not the headline still
+    # survive on days with few headline matches.
+    relevant = L.filter_relevant_articles(recent) or []
+    rel_ids = {id(a) for a in relevant}
+    ordered = relevant + [a for a in recent if id(a) not in rel_ids]
+    logger.info("filter: %d relevant-by-headline of %d recent (relevant-first)",
+                len(relevant), len(ordered))
+    return ordered
+
+
+def _focus(enhanced):
+    """Full-text relevance pass: keep only articles whose extracted body matches
+    the psych/family focus. Falls back to the enhanced set if nothing matches so
+    the pipeline still produces output."""
+    focused = L.filter_relevant_articles(enhanced) or []
+    if not focused:
+        logger.warning("Full-text focus pass matched nothing — keeping enhanced set")
+        return enhanced
+    logger.info("focus pass: %d of %d enhanced articles on-topic", len(focused), len(enhanced))
+    return focused
 
 
 async def filter_articles(state: ReportState) -> ReportState:
@@ -112,7 +131,7 @@ async def filter_articles(state: ReportState) -> ReportState:
     logger.info("filter_articles: %d recent (<= %d days)", len(articles), days)
     return {
         "articles": articles,
-        "progress": "🔍 *الخطوة 2/4:* تصفية أخبار الحج والعمرة...",
+        "progress": "🔍 *الخطوة 2/4:* تصفية أخبار الأسرة والمجتمع...",
     }
 
 
@@ -124,7 +143,7 @@ async def enhance_daily(state: ReportState) -> ReportState:
     enhanced = await asyncio.to_thread(
         L.enhance_articles_with_content, articles, 30
     )
-    enhanced = enhanced or []
+    enhanced = _focus(enhanced or [])
     return {
         "articles": enhanced,
         "enhanced_count": sum(1 for a in enhanced if a.get("full_content")),
@@ -141,7 +160,7 @@ async def enhance_periodic(state: ReportState) -> ReportState:
             articles, max_articles=max_articles, weekly_mode=weekly, monthly_mode=not weekly
         )
     )
-    enhanced = enhanced or []
+    enhanced = _focus(enhanced or [])
     return {
         "articles": enhanced,
         "enhanced_count": sum(1 for a in enhanced if a.get("full_content")),
@@ -160,11 +179,11 @@ async def generate_daily(state: ReportState) -> ReportState:
     text, error = await llm.ainvoke_text(system, user, max_tokens=2200, temperature=0.45)
     if error or not text:
         logger.warning("generate_daily fell back: %s", error)
-        text = L.build_fallback_hajj_blog_content(articles, state.get("category"))
+        text = L.build_fallback_family_blog_content(articles, state.get("category"))
     else:
         text = _strip_seo_preamble(text)
         if not text.lstrip().startswith("#"):
-            text = "# التقرير اليومي للحج والعمرة\n\n" + text
+            text = "# التقرير اليومي للأسرة والمجتمع\n\n" + text
     return {
         "blog_content": text,
         "progress": "✍️ *الخطوة 4/4:* إنهاء إعداد التقرير...",
@@ -174,7 +193,7 @@ async def generate_daily(state: ReportState) -> ReportState:
 async def generate_periodic(state: ReportState) -> ReportState:
     articles = state.get("articles") or []
     if not articles:
-        return {"error": "لم يتم العثور على أخبار حج وعمرة كافية."}
+        return {"error": "لم يتم العثور على أخبار كافية عن الأسرة والمجتمع."}
 
     period = state.get("time_period", "weekly")
     system, user = prompts.periodic_blog(articles, "combined", period, state.get("keywords"))
@@ -218,7 +237,7 @@ async def generate_magazine(state: ReportState) -> ReportState:
 
 def _backfill_magazine_images(data: dict, article_map: dict):
     """Attach the correct source image to each magazine article via article_index,
-    scraping og:image as a fallback — mirrors the Hajj magazine handler."""
+    scraping og:image as a fallback — mirrors the magazine handler."""
     for mag_article in data.get("articles", []) or []:
         try:
             idx = int(mag_article.get("article_index"))
@@ -246,7 +265,7 @@ def _backfill_magazine_images(data: dict, article_map: dict):
                         mag_article["image_url"] = og_img
 
         if not mag_article.get("location"):
-            mag_article["location"] = "مكة المكرمة"
+            mag_article["location"] = "السعودية"
 
 
 def _parse_magazine_json(content_text: str):
@@ -276,8 +295,8 @@ async def render_daily(state: ReportState) -> ReportState:
     if not content:
         return {}
     path = await asyncio.to_thread(
-        L.create_hajj_blog_pdf, content,
-        "التقرير اليومي للحج والعمرة", True,
+        L.create_family_blog_pdf, content,
+        "التقرير اليومي للأسرة والمجتمع", True,
     )
     return {"outputs": [{"path": path, "kind": "daily"}]}
 
@@ -289,8 +308,8 @@ async def render_periodic(state: ReportState) -> ReportState:
     period = state.get("time_period", "weekly")
     adj = "الأسبوعي" if period == "weekly" else "الشهري"
     path = await asyncio.to_thread(
-        L.create_hajj_blog_pdf, content,
-        f"التقرير {adj} الشامل للحج والعمرة", True,
+        L.create_family_blog_pdf, content,
+        f"التقرير {adj} الشامل للأسرة والمجتمع", True,
     )
     return {"outputs": [{"path": path, "kind": "combined"}]}
 

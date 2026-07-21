@@ -55,9 +55,16 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-# Register Arabic font
+# Register Arabic font. Resolve relative to THIS file first (works regardless of
+# the caller's CWD — e.g. the quality_platform backend), then fall back to CWD.
 try:
-    pdfmetrics.registerFont(TTFont('Amiri', 'Amiri-Regular.ttf'))
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _amiri = next(
+        (p for p in (os.path.join(_here, 'Amiri-Regular.ttf'), 'Amiri-Regular.ttf')
+         if os.path.exists(p)),
+        'Amiri-Regular.ttf',
+    )
+    pdfmetrics.registerFont(TTFont('Amiri', _amiri))
 except Exception as e:
     logger.error(f"Failed to register Arabic font: {e}")
 
@@ -172,7 +179,7 @@ def get_usage_status(user_id):
     }
 
 # Your Telegram Bot Token (you'll need to get this from @BotFather)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8421984697:AAEt4JJ8wohOYGkCEEOjAGtohykgIlXCUzU")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
 # AWS Bedrock Configuration
 # Support both variable name formats for flexibility
@@ -183,12 +190,12 @@ AWS_BEDROCK_INFERENCE_PROFILE = os.getenv("AWS_BEDROCK_INFERENCE_PROFILE") or os
 # Initialize AWS Bedrock client
 try:
     if not AWS_BEARER_TOKEN_BEDROCK:
-        logger.warning("⚠️ AWS_BEARER_TOKEN_BEDROCK environment variable is not set!")
-        logger.warning("   Please set it using:")
-        logger.warning("   Windows: set AWS_BEARER_TOKEN_BEDROCK=your_token")
-        logger.warning("   Linux/Mac: export AWS_BEARER_TOKEN_BEDROCK=your_token")
-        raise ValueError("AWS_BEARER_TOKEN_BEDROCK environment variable is required")
-    
+        # Not fatal: some hosts (e.g. the quality_platform backend) unset the
+        # bearer token and authenticate Bedrock via AWS access keys / the default
+        # boto3 credential chain instead. Warn and continue building the client.
+        logger.warning("⚠️ AWS_BEARER_TOKEN_BEDROCK not set — using the default boto3 "
+                       "credential chain (AWS access keys) for Bedrock instead.")
+
     # Standard client with default timeout (60 seconds)
     bedrock_client = boto3.client(
         service_name="bedrock-runtime",
@@ -223,7 +230,7 @@ KEYWORD_INPUT_INSTRUCTIONS = (
     "أرسل الكلمات المفتاحية بالصيغة التالية (بالإنجليزية):\n"
     "`Primary Keyword | secondary keyword 1, secondary keyword 2, secondary keyword 3`\n\n"
     "مثال:\n"
-    "`Hajj News 2026 | hajj, umrah, pilgrimage, makkah`\n\n"
+    "`Family News 2026 | family, parenting, wellbeing, society`\n\n"
     "أرسل كلمة *cancel* لإلغاء إدخال الكلمات المفتاحية."
 )
 
@@ -257,8 +264,8 @@ def build_keyword_instruction_block(keywords):
         )
     else:
         keyword_header = (
-            "PRIMARY KEYWORD: Not specified (infer the best fit from the Hajj and Umrah coverage)\n"
-            "SECONDARY KEYWORDS / LSI: Use related Hajj, Umrah, pilgrimage terms, synonyms, and supporting subtopics\n"
+            "PRIMARY KEYWORD: Not specified (infer the best fit from the Family and Society coverage)\n"
+            "SECONDARY KEYWORDS / LSI: Use related family, parenting, wellbeing terms, synonyms, and supporting subtopics\n"
         )
 
     return f"""
@@ -275,10 +282,10 @@ SEO requirements:
 Mandatory SEO outputs at the top of the response (before any other sections):
 1. SEO Title: < 60 characters, includes the primary keyword and communicates a clear benefit.
 2. Meta Description: 120–150 characters summarizing the main value, optionally includes the primary keyword once (only if it reads naturally) plus a light CTA.
-3. Recommended Slug: lowercase, hyphen-separated version of the primary keyword (e.g., hajj-news-2026).
+3. Recommended Slug: lowercase, hyphen-separated version of the primary keyword (e.g., family-news-2026).
 4. Headings Structure: Proposed H2/H3 outline derived from the primary + secondary keywords using varied phrasing.
 
-After listing these SEO elements, continue with the requested Hajj news blog structure while following the keyword guidance above.
+After listing these SEO elements, continue with the requested Family news blog structure while following the keyword guidance above.
 """.strip()
 
 
@@ -295,191 +302,432 @@ def get_user_keywords(context):
     except Exception:
         return None
 
-def fetch_hajgov_news(page_size=50):
-    """Fetch Hajj news from haj.gov.sa REST API"""
-    url = "https://haj.gov.sa/s-core/customApi/News/GetAll"
-    params = {
-        'PageSize': page_size,
-        'PageNumber': 1,
-        'Language': 'ar'
-    }
-    articles = []
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json'
-        }
-        resp = requests.get(url, params=params, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        items = data if isinstance(data, list) else data.get('data', data.get('items', data.get('result', [])))
-        if isinstance(items, dict):
-            items = items.get('items', items.get('data', []))
-        
-        for item in items:
-            try:
-                title = item.get('title', '')
-                publish_date = item.get('publishDate', '')
-                
-                # Extract description from nested value
-                desc_obj = item.get('description', {})
-                description = ''
-                if isinstance(desc_obj, dict):
-                    description = desc_obj.get('value', '')
-                elif isinstance(desc_obj, str):
-                    description = desc_obj
-                
-                # Strip HTML tags from description
-                if description:
-                    description = re.sub(r'<[^>]+>', '', description).strip()
-                
-                # Build article URL
-                item_path = item.get('itemPath', '')
-                article_url = f"https://haj.gov.sa{item_path}" if item_path else ''
-                
-                # Get image
-                image_item = item.get('imageItem', {})
-                image_url = ''
-                if isinstance(image_item, dict):
-                    image_url = image_item.get('src', '')
-                
-                # Parse date
-                published_iso = ''
-                if publish_date:
-                    try:
-                        if 'T' in publish_date:
-                            published_iso = publish_date
-                        else:
-                            dt = datetime.strptime(publish_date, '%Y-%m-%d')
-                            published_iso = dt.isoformat()
-                    except:
-                        published_iso = publish_date
-                
-                article = {
-                    'title': title,
-                    'description': description[:500] if description else '',
-                    'full_content': description,  # haj.gov.sa provides full text
-                    'url': article_url,
-                    'publishedAt': published_iso,
-                    'source': {'name': 'وزارة الحج والعمرة'},
-                    'image_url': image_url,
-                    'extraction_method': 'api',
-                    'content_length': len(description) if description else 0
-                }
-                articles.append(article)
-            except Exception as e:
-                logger.warning(f"Error parsing haj.gov.sa article: {e}")
-                continue
-        
-        logger.info(f"Fetched {len(articles)} articles from haj.gov.sa")
-        return articles
-    
-    except Exception as e:
-        logger.error(f"Error fetching haj.gov.sa news: {e}")
+# ===========================================================================
+# Family & Society news sources (مصادر الأسرة والمجتمع)
+# ---------------------------------------------------------------------------
+# Sources come from three channels:
+#   * twitter — Saudi X/Twitter accounts via the Twitter API v2 search endpoint
+#   * rss     — sites exposing an RSS/Atom feed (parsed with feedparser)
+#   * html    — static pages scraped with requests + BeautifulSoup
+#   * js      — JavaScript single-page sites rendered with Playwright (headless
+#               Chromium) before the same BeautifulSoup extraction
+# Every fetcher returns article dicts in the SAME shape the rest of the pipeline
+# expects: title / description / url / publishedAt / source{name} / image_url.
+# ===========================================================================
+
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
+
+# Target number of articles to pull per source (feeds/pages that expose fewer
+# simply return fewer — this is a ceiling, not a guarantee).
+MAX_PER_SOURCE = 50
+
+# Saudi & international X/Twitter accounts monitored for family & society news.
+TWITTER_ACCOUNTS = [
+    {"username": "SPAregions",      "name": "واس - وكالة الأنباء السعودية"},
+    {"username": "CGCSaudi",        "name": "المركز الإعلامي للتواصل الحكومي"},
+    {"username": "SaudiVision2030", "name": "رؤية السعودية 2030"},
+    {"username": "UNarabic",        "name": "الأمم المتحدة"},
+    {"username": "FAC_SA",          "name": "مجلس شؤون الأسرة"},
+    {"username": "ncnp_sa",         "name": "المركز الوطني لتنمية القطاع غير الربحي"},
+    {"username": "QOL_2030",        "name": "برنامج جودة الحياة"},
+    {"username": "Stats_Saudi",     "name": "الهيئة العامة للإحصاء"},
+]
+
+# Web sources. ``type`` selects the fetcher. For html/js sources, ``link_selector``
+# targets the anchor tags for individual articles and ``base`` is prepended to
+# relative hrefs. Feed URLs / selectors are best-effort and may need tuning.
+SOURCES = [
+    # --- RSS / Atom feeds (reliable; verified live) ---
+    {"name": "الأمم المتحدة", "type": "rss",
+     "url": "https://news.un.org/feed/subscribe/ar/news/all/rss.xml"},
+    {"name": "Our World in Data", "type": "rss",
+     "url": "https://ourworldindata.org/atom.xml"},
+    {"name": "Focus on the Family", "type": "rss",
+     "url": "https://www.focusonthefamily.com/feed/"},
+    {"name": "الأبوة والأمومة (Parenting)", "type": "rss",
+     "url": "https://www.scarymommy.com/feed"},
+    {"name": "CDC - صحة الأسرة", "type": "rss",
+     "url": "https://tools.cdc.gov/api/v2/resources/media/316422.rss"},
+    # --- Static HTML page (DIFI publications, verified live) ---
+    {"name": "معهد الدوحة الدولي للأسرة", "type": "html",
+     "url": "https://www.difi.org.qa/",
+     "base": "https://www.difi.org.qa",
+     "link_selector": "a[href*='/publications/'], a[href*='/research-reports/']"},
+    # --- JavaScript SPA (SPA agency, verified live) ---
+    # SPA article links are numeric paths, e.g. /2637404 — filter with href_regex.
+    {"name": "واس - وكالة الأنباء السعودية", "type": "js",
+     "url": "https://www.spa.gov.sa/ar/list/social",
+     "base": "https://www.spa.gov.sa", "link_selector": "a[href]",
+     "href_regex": r"^/N?\d{5,}$", "wait_selector": "a[href]"},
+    # NOTE: The remaining Saudi government sources — رؤية السعودية 2030
+    # (@SaudiVision2030), مجلس شؤون الأسرة (@FAC_SA),
+    # الهيئة العامة للإحصاء (@Stats_Saudi), المركز الوطني لتنمية القطاع غير الربحي
+    # (@ncnp_sa), التواصل الحكومي (@CGCSaudi), and برنامج جودة الحياة (@QOL_2030) —
+    # do not expose a scrapeable news listing (bot-blocked / JS catalog / "coming
+    # soon"), so they are covered via their X/Twitter accounts in TWITTER_ACCOUNTS.
+]
+
+
+def fetch_twitter_news(max_tweets_per_account=15):
+    """Fetch recent tweets from configured X/Twitter accounts via Twitter API v2.
+
+    Returns a list of article dicts in the standard pipeline format. Skips
+    gracefully (returns []) when no bearer token is configured.
+    """
+    if not TWITTER_BEARER_TOKEN or TWITTER_BEARER_TOKEN.startswith('DUMMY'):
+        logger.warning("Twitter Bearer Token not configured. Skipping Twitter fetch.")
         return []
 
-def fetch_cnn_hajj_news():
-    """Scrape Hajj news from CNN Arabic tag page"""
-    url = "https://arabic.cnn.com/tag/alhj"
     articles = []
-    
+    headers = {
+        'Authorization': f'Bearer {TWITTER_BEARER_TOKEN}',
+        'User-Agent': 'FamilyNewsBot/1.0',
+    }
+
+    # Batch accounts to stay within the query length limit.
+    account_batches = []
+    batch_size = 5
+    for i in range(0, len(TWITTER_ACCOUNTS), batch_size):
+        account_batches.append(TWITTER_ACCOUNTS[i:i + batch_size])
+
+    for batch in account_batches:
+        try:
+            from_queries = [f'from:{acc["username"]}' for acc in batch]
+            query = f'({" OR ".join(from_queries)}) -is:retweet'
+
+            url = 'https://api.twitter.com/2/tweets/search/recent'
+            params = {
+                'query': query,
+                'max_results': min(max_tweets_per_account * len(batch), 100),
+                'tweet.fields': 'created_at,author_id,text,public_metrics,entities',
+                'user.fields': 'username,name',
+                'expansions': 'author_id,attachments.media_keys',
+                'media.fields': 'url,preview_image_url,type',
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+
+            if response.status_code == 401:
+                logger.error("Twitter API authentication failed (401). Check bearer token.")
+                return articles
+            elif response.status_code == 429:
+                logger.warning("Twitter API rate limited (429). Skipping remaining batches.")
+                break
+            elif response.status_code != 200:
+                logger.warning(f"Twitter API returned {response.status_code}: {response.text[:200]}")
+                continue
+
+            data = response.json()
+            tweets = data.get('data', [])
+
+            users_map = {}
+            includes = data.get('includes', {})
+            for user in includes.get('users', []):
+                users_map[user['id']] = {
+                    'username': user.get('username', ''),
+                    'name': user.get('name', '')
+                }
+
+            media_map = {}
+            for media in includes.get('media', []):
+                media_key = media.get('media_key', '')
+                media_map[media_key] = media.get('url') or media.get('preview_image_url', '')
+
+            for tweet in tweets:
+                try:
+                    tweet_id = tweet.get('id', '')
+                    text = tweet.get('text', '')
+                    created_at = tweet.get('created_at', '')
+                    author_id = tweet.get('author_id', '')
+
+                    author = users_map.get(author_id, {})
+                    username = author.get('username', '')
+                    display_name = author.get('name', '')
+
+                    for acc in TWITTER_ACCOUNTS:
+                        if acc['username'].lower() == username.lower():
+                            display_name = acc['name']
+                            break
+
+                    image_url = ''
+                    tweet_entities = tweet.get('entities', {})
+                    if tweet_entities.get('urls'):
+                        for url_entity in tweet_entities['urls']:
+                            expanded_url = url_entity.get('expanded_url', '')
+                            if any(ext in expanded_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                                image_url = expanded_url
+                                break
+
+                    tweet_url = f'https://x.com/{username}/status/{tweet_id}' if username else ''
+
+                    article = {
+                        'title': text[:120] + ('...' if len(text) > 120 else ''),
+                        'description': text,
+                        'full_content': text,
+                        'url': tweet_url,
+                        'publishedAt': created_at,
+                        'source': {'name': f'{display_name} (@{username})'},
+                        'image_url': image_url,
+                        'urlToImage': image_url,
+                        'is_saudi_source': True,
+                    }
+                    articles.append(article)
+                except Exception as tweet_error:
+                    logger.warning(f"Error parsing tweet: {tweet_error}")
+                    continue
+
+            time.sleep(0.5)
+        except requests.RequestException as req_error:
+            logger.error(f"Request error fetching Twitter batch: {req_error}")
+            continue
+        except Exception as batch_error:
+            logger.error(f"Error processing Twitter batch: {batch_error}")
+            continue
+
+    logger.info(f"Successfully fetched {len(articles)} tweets from Twitter")
+    return articles
+
+
+def _parse_feed_date(entry):
+    """Return an ISO date string from a feedparser entry, or ''."""
+    for attr in ('published_parsed', 'updated_parsed'):
+        tm = entry.get(attr)
+        if tm:
+            try:
+                return datetime(*tm[:6]).isoformat()
+            except Exception:
+                pass
+    return entry.get('published', '') or entry.get('updated', '')
+
+
+def _parse_feed_entries(entries, source_name):
+    out = []
+    for entry in entries:
+        title = (entry.get('title') or '').strip()
+        link = entry.get('link') or ''
+        if not title or not link:
+            continue
+        summary = re.sub(r'<[^>]+>', '', entry.get('summary', '') or '').strip()
+
+        image_url = ''
+        if entry.get('media_content'):
+            image_url = entry['media_content'][0].get('url', '')
+        elif entry.get('media_thumbnail'):
+            image_url = entry['media_thumbnail'][0].get('url', '')
+
+        out.append({
+            'title': title,
+            'description': summary[:500],
+            'full_content': summary,
+            'url': link,
+            'publishedAt': _parse_feed_date(entry),
+            'source': {'name': source_name},
+            'image_url': image_url,
+            'urlToImage': image_url,
+        })
+    return out
+
+
+def fetch_rss_source(feed_url, source_name, max_items=MAX_PER_SOURCE):
+    """Fetch and normalize an RSS/Atom feed into standard article dicts.
+
+    Tries to reach ``max_items`` by paginating WordPress-style feeds
+    (``?paged=N``). Stops when the target is met, a page repeats the previous
+    page's first link, or a page is empty — so non-paginating feeds harmlessly
+    return only their single page.
+    """
+    articles = []
+    seen_links = set()
+    try:
+        sep = '&' if '?' in feed_url else '?'
+        prev_first = None
+        for page in range(1, 7):  # up to 6 pages
+            page_url = feed_url if page == 1 else f"{feed_url}{sep}paged={page}"
+            feed = feedparser.parse(page_url)
+            entries = feed.entries or []
+            if not entries:
+                break
+            first_link = entries[0].get('link')
+            if page > 1 and first_link == prev_first:
+                break  # feed ignored ?paged= — same page again
+            prev_first = first_link
+
+            new = [a for a in _parse_feed_entries(entries, source_name)
+                   if a['url'] not in seen_links]
+            if not new:
+                break
+            for a in new:
+                seen_links.add(a['url'])
+            articles.extend(new)
+            if len(articles) >= max_items:
+                articles = articles[:max_items]
+                break
+        logger.info(f"Fetched {len(articles)} articles from RSS: {source_name}")
+    except Exception as e:
+        logger.error(f"Error fetching RSS {source_name} ({feed_url}): {e}")
+    return articles
+
+
+def _extract_listing(html, cfg):
+    """Extract article links/titles from a listing page's HTML using cfg selectors.
+
+    Optional ``href_regex`` in the config further restricts matched anchors to
+    hrefs matching that pattern (useful when article links are numeric paths).
+    """
+    articles = []
+    base = cfg.get('base', '')
+    link_selector = cfg.get('link_selector', 'a')
+    href_pat = re.compile(cfg['href_regex']) if cfg.get('href_regex') else None
+    source_name = cfg['name']
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        seen = set()
+        for link_el in soup.select(link_selector):
+            href = link_el.get('href', '')
+            if not href:
+                continue
+            if href_pat and not href_pat.search(href):
+                continue
+            full_url = urljoin(base or cfg['url'], href)
+            if full_url in seen:
+                continue
+            title = link_el.get_text(strip=True)
+            if not title:
+                img = link_el.select_one('img')
+                title = img.get('alt', '').strip() if img else ''
+            if not title or len(title) < 12:
+                continue
+            seen.add(full_url)
+            articles.append({
+                'title': title,
+                'description': '',
+                'url': full_url,
+                'publishedAt': '',
+                'source': {'name': source_name},
+            })
+    except Exception as e:
+        logger.error(f"Error extracting listing for {source_name}: {e}")
+    return articles
+
+
+def fetch_html_source(cfg):
+    """Scrape a static (non-JS) HTML listing page with requests + BeautifulSoup."""
+    articles = []
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ar,en;q=0.9'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ar,en;q=0.9',
         }
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(cfg['url'], headers=headers, timeout=30)
         resp.raise_for_status()
-        
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # Find article links - CNN Arabic uses various card structures
-        article_links = soup.select('a[href*="/article/"]')
-        
-        seen_urls = set()
-        for link_el in article_links:
-            try:
-                href = link_el.get('href', '')
-                if not href or href in seen_urls:
-                    continue
-                
-                # Build full URL
-                if href.startswith('/'):
-                    full_url = f"https://arabic.cnn.com{href}"
-                elif href.startswith('http'):
-                    full_url = href
-                else:
-                    continue
-                
-                seen_urls.add(href)
-                
-                # Extract title from the link text or nested elements
-                title = ''
-                title_el = link_el.select_one('span, h2, h3, .cd__headline-text')
-                if title_el:
-                    title = title_el.get_text(strip=True)
-                if not title:
-                    title = link_el.get_text(strip=True)
-                
-                if not title or len(title) < 10:
-                    continue
-                
-                # Try to extract date from URL pattern (YYYY/MM/DD)
-                published_iso = ''
-                date_match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', full_url)
-                if date_match:
-                    try:
-                        dt = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
-                        published_iso = dt.isoformat()
-                    except:
-                        pass
-                
-                article = {
-                    'title': title,
-                    'description': '',
-                    'url': full_url,
-                    'publishedAt': published_iso,
-                    'source': {'name': 'CNN عربية'}
-                }
-                articles.append(article)
-            except Exception as e:
-                logger.warning(f"Error parsing CNN Arabic article: {e}")
-                continue
-        
-        logger.info(f"Fetched {len(articles)} articles from CNN Arabic")
-        return articles
-    
+        articles = _extract_listing(resp.text, cfg)
+        logger.info(f"Fetched {len(articles)} articles from HTML: {cfg['name']}")
     except Exception as e:
-        logger.error(f"Error fetching CNN Arabic Hajj news: {e}")
+        logger.error(f"Error fetching HTML {cfg['name']} ({cfg['url']}): {e}")
+    return articles
+
+
+def fetch_js_source(cfg):
+    """Render a JavaScript SPA with headless Chromium (Playwright), then extract.
+
+    Degrades gracefully: if Playwright/Chromium is unavailable, logs and returns
+    [] so the rest of the pipeline keeps working.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        logger.warning(f"Playwright not available, skipping JS source {cfg['name']}: {e}")
         return []
+
+    articles = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                               '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
+                page.goto(cfg['url'], timeout=45000, wait_until='domcontentloaded')
+                wait_selector = cfg.get('wait_selector')
+                if wait_selector:
+                    try:
+                        page.wait_for_selector(wait_selector, timeout=15000)
+                    except Exception:
+                        pass
+                page.wait_for_timeout(2000)
+                html = page.content()
+            finally:
+                browser.close()
+        articles = _extract_listing(html, cfg)
+        logger.info(f"Fetched {len(articles)} articles from JS: {cfg['name']}")
+    except Exception as e:
+        logger.error(f"Error rendering JS {cfg['name']} ({cfg['url']}): {e}")
+    return articles
+
+
+def _fetch_one_source(cfg):
+    """Dispatch a single source config to the right fetcher."""
+    stype = cfg.get('type')
+    try:
+        if stype == 'rss':
+            return fetch_rss_source(cfg['url'], cfg['name'])
+        if stype == 'html':
+            return fetch_html_source(cfg)
+        if stype == 'js':
+            return fetch_js_source(cfg)
+    except Exception as e:
+        logger.error(f"Source {cfg.get('name')} failed: {e}")
+    return []
+
+
+def fetch_family_news(max_tweets_per_account=15):
+    """Aggregate all Family & Society sources (Twitter + RSS + HTML + JS).
+
+    Runs the web sources concurrently, adds Twitter, merges, and de-duplicates.
+    Per-source failures are isolated so one dead source never fails the batch.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    all_articles = []
+
+    # Twitter first (its own batching/rate limits).
+    try:
+        all_articles.extend(fetch_twitter_news(max_tweets_per_account) or [])
+    except Exception as e:
+        logger.error(f"Twitter fetch failed: {e}")
+
+    # Web sources in parallel.
+    with ThreadPoolExecutor(max_workers=min(8, len(SOURCES) or 1)) as executor:
+        for result in executor.map(_fetch_one_source, SOURCES):
+            all_articles.extend(result or [])
+
+    logger.info(f"fetch_family_news: {len(all_articles)} articles before dedup")
+    try:
+        all_articles = clean_deduplicate_articles(all_articles)
+    except Exception as e:
+        logger.warning(f"Dedup failed, returning raw list: {e}")
+    logger.info(f"fetch_family_news: {len(all_articles)} articles after dedup")
+    return all_articles
 
 def filter_recent_articles(articles, days=7):
-    """Filter articles to only include those from the past specified days, and strictly not older than 2026"""
+    """Filter articles to those published within the past ``days`` days.
+
+    Articles with no parseable date are kept (many sources omit dates); only
+    articles with a date clearly older than the cutoff are dropped.
+    """
     if not articles:
         return []
-    
+
     cutoff_date = datetime.now() - timedelta(days=days)
-    
-    # Enforce minimum date to be January 1, 2026 for the 2026 Hajj season
-    min_date = datetime(2026, 1, 1)
-    if cutoff_date < min_date:
-        cutoff_date = min_date
-        
     recent_articles = []
-    
+
     for article in articles:
         if not article:
             continue
         published_at = article.get('publishedAt') or article.get('published_at')
-        
-        # Check URL or title for old years just to be extra safe
-        url = article.get('url', '')
-        title = article.get('title', '')
-        if re.search(r'/(2025|2024|2023|2022|2021)/', url) or re.search(r'\b(2025|2024|2023|2022|2021)\b', title):
-            continue
-            
+
         if published_at:
             try:
                 # Handle different date formats
@@ -488,66 +736,130 @@ def filter_recent_articles(articles, days=7):
                 else:
                     # Truncate to first 10 chars for robust date parsing (YYYY-MM-DD)
                     pub_date = datetime.strptime(published_at[:10], '%Y-%m-%d')
-                
+
                 if pub_date.replace(tzinfo=None) >= cutoff_date:
                     recent_articles.append(article)
-            except Exception as e:
-                # If date parsing fails, check if string contains old years
-                pub_str = str(published_at)
-                if any(old_year in pub_str for old_year in ['2025', '2024', '2023', '2022', '2021']):
-                    continue
-                # If it doesn't clearly contain an old year, include it
+            except Exception:
+                # Unparseable date — keep the article rather than guess.
                 recent_articles.append(article)
         else:
-            # If no date available, include the article (already checked URL/title for old years above)
+            # No date available — include the article.
             recent_articles.append(article)
-    
+
     return recent_articles
 
+
+# ===========================================================================
+# Relevance filter — الجانب النفسي للأسرة والمجتمع
+# (psychological / mental-wellbeing angle of family & society)
+# ===========================================================================
+# Precision-focused: ONLY psychological / emotional / family-relational terms.
+# Deliberately EXCLUDES bare demographic/humanitarian words (الأسرة، الأطفال،
+# family, child, community…) because those pulled in unrelated UN humanitarian
+# and demographic items. A match here means the article is about the
+# psychological / emotional / relational side of family & society.
+PSYCH_FAMILY_KEYWORDS = [
+    # ---- Arabic: mental / psychological ----
+    'نفسي', 'نفسية', 'النفسي', 'النفسية', 'الصحة النفسية', 'الصحة العقلية', 'الصحة الذهنية',
+    'الرفاه النفسي', 'الرفاهية النفسية', 'العافية النفسية', 'السلامة النفسية', 'التوازن النفسي',
+    'الاتزان النفسي', 'الدعم النفسي', 'العلاج النفسي', 'الاستشارة النفسية', 'الإرشاد النفسي',
+    'التوجيه النفسي', 'الطب النفسي', 'العيادة النفسية', 'المعالج النفسي', 'الأخصائي النفسي',
+    'الطبيب النفسي', 'جلسات نفسية', 'ضغط نفسي', 'الضغوط النفسية', 'الإجهاد النفسي',
+    'الإرهاق النفسي', 'التعب النفسي', 'صدمة نفسية', 'اضطراب نفسي', 'اضطرابات نفسية',
+    'الاحتراق النفسي', 'المرونة النفسية', 'الصحة النفسية للطفل', 'صحة المراهقين النفسية',
+    'الوقاية من الانتحار', 'الأفكار الانتحارية', 'اكتئاب', 'الاكتئاب', 'انتحار', 'الانتحار',
+    'إيذاء النفس', 'الوسواس القهري', 'نوبات الهلع', 'نوبات القلق', 'القلق النفسي',
+    'الرهاب الاجتماعي', 'اضطراب ما بعد الصدمة', 'ثنائي القطب', 'التوحد', 'فرط الحركة',
+    'تشتت الانتباه', 'صعوبات التعلم', 'الشفاء النفسي',
+    # ---- Arabic: emotional / self ----
+    'الصحة العاطفية', 'الدعم العاطفي', 'الذكاء العاطفي', 'تنظيم المشاعر', 'إدارة المشاعر',
+    'إدارة الغضب', 'نوبات الغضب', 'الرضا النفسي', 'الراحة النفسية', 'راحة نفسية', 'الهدوء النفسي',
+    'اليقظة الذهنية', 'الوعي الذاتي', 'احترام الذات', 'تقدير الذات', 'الثقة بالنفس', 'ثقة بالنفس',
+    # ---- Arabic: family / relational (psychology-implying only) ----
+    'العنف الأسري', 'الإرشاد الأسري', 'العلاقات الأسرية', 'الترابط الأسري', 'التماسك الأسري',
+    'الاستقرار الأسري', 'التواصل الأسري', 'الحوار الأسري', 'جودة الحياة الأسرية', 'الرفاه الأسري',
+    'التربية الإيجابية', 'التنشئة', 'الوالدية', 'العلاقة بين الوالدين', 'الأبوة', 'الأمومة',
+    'تربية الأبناء', 'سلوك الطفل', 'الصحة النفسية للأسرة', 'العلاقات الزوجية', 'الخلافات الزوجية',
+    'الطلاق', 'التنمر', 'الإدمان',
+    # ---- English: mental / emotional ----
+    'mental health', 'mental wellbeing', 'mental well-being', 'psychological', 'psychology',
+    'psychiatric', 'psychiatry', 'psychotherapy', 'psychologist', 'psychiatrist', 'therapist',
+    'counselor', 'counsellor', 'emotional health', 'emotional wellbeing', 'emotional well-being',
+    'emotional intelligence', 'emotional regulation', 'depression', 'anxiety', 'stress management',
+    'burnout', 'trauma', 'ptsd', 'grief', 'phobia', 'ocd', 'bipolar', 'autism', 'adhd',
+    'loneliness', 'resilience', 'mindfulness', 'self-esteem', 'self-confidence', 'self-care',
+    'suicide', 'suicidal', 'self-harm', 'addiction', 'bullying', 'coping', 'empathy',
+    # ---- English: family / relational (psychology-implying only) ----
+    'parenting', 'child development', 'family relationships', 'family bond', 'marriage counseling',
+    'marital', 'couple', 'divorce', 'work-life balance', 'screen time',
+]
+
+
+def filter_relevant_articles(articles, keywords=None):
+    """Keep only articles whose text matches the psychological family/society
+    focus (or a supplied keyword list). Matching is case-insensitive; Arabic is
+    unaffected by lowercasing, English terms are matched in lowercase."""
+    kws = [k.lower() for k in (keywords or PSYCH_FAMILY_KEYWORDS)]
+    matched = []
+    for a in articles or []:
+        if not a:
+            continue
+        title = a.get('title', '') or ''
+        desc = a.get('description', '') or ''
+        content = a.get('full_content', '') or ''
+        text = f"{title} {desc} {content}".lower()
+        if any(k in text for k in kws):
+            matched.append(a)
+    logger.info(f"filter_relevant_articles: {len(matched)}/{len(articles or [])} match psych/family focus")
+    return matched
+
+
+# Family & Society category taxonomy (shared across the module).
+FAMILY_CATEGORIES = (
+    'الأسرة والطفولة',
+    'الصحة والرفاهية',
+    'المجتمع والقطاع غير الربحي',
+    'الإحصاء والدراسات',
+    'أخبار عامة',
+)
+
+
 def categorize_articles(articles):
-    """Categorize articles by Hajj and Umrah topics"""
+    """Categorize articles by Family & Society topics"""
     if not articles:
         logger.warning("No articles provided to categorize_articles")
-        return {
-            'خدمات الحجاج': [],
-            'التنظيم والإدارة': [],
-            'التقنية والابتكار': [],
-            'الصحة والسلامة': [],
-            'أخبار عامة': []
-        }
-    
-    categories = {
-        'خدمات الحجاج': [],
-        'التنظيم والإدارة': [],
-        'التقنية والابتكار': [],
-        'الصحة والسلامة': [],
-        'أخبار عامة': []
-    }
-    
-    services_keywords = ['خدمات', 'حجاج', 'معتمرين', 'تفويج', 'نقل', 'إسكان', 'سكن', 'إعاشة', 'تغذية', 'مخيمات', 'حملات', 'تصاريح', 'تأشيرات', 'نسك']
-    org_keywords = ['تنظيم', 'إدارة', 'وزارة', 'هيئة', 'إشراف', 'خطة', 'استعداد', 'تشغيل', 'موسم', 'منظومة', 'طاقة استيعابية', 'أعداد']
-    tech_keywords = ['تقنية', 'تطبيق', 'رقمي', 'ذكاء اصطناعي', 'إلكتروني', 'منصة', 'روبوت', 'ابتكار', 'تحول رقمي', 'smart', 'digital']
-    health_keywords = ['صحة', 'سلامة', 'طبي', 'مستشفى', 'إسعاف', 'وقاية', 'حرارة', 'ضربة شمس', 'وباء', 'تطعيم', 'لقاح', 'إنقاذ', 'أمن']
-    
+        return {cat: [] for cat in FAMILY_CATEGORIES}
+
+    categories = {cat: [] for cat in FAMILY_CATEGORIES}
+
+    family_keywords = ['أسرة', 'طفل', 'أطفال', 'طفولة', 'أمومة', 'أبوة', 'والدين', 'زواج', 'أبناء',
+                       'تربية', 'مراهقين', 'family', 'child', 'parent', 'parenting', 'kids', 'marriage']
+    health_keywords = ['صحة', 'صحية', 'رفاهية', 'جودة الحياة', 'نفسية', 'تغذية', 'طبي', 'وقاية', 'سلامة',
+                      'رياضة', 'health', 'wellbeing', 'wellness', 'mental', 'nutrition']
+    society_keywords = ['مجتمع', 'تطوع', 'جمعية', 'غير ربحي', 'خيري', 'مبادرة', 'قطاع غير ربحي', 'تنمية',
+                       'مسؤولية اجتماعية', 'nonprofit', 'charity', 'volunteer', 'community', 'ngo']
+    stats_keywords = ['إحصاء', 'إحصائية', 'بيانات', 'دراسة', 'تقرير', 'مؤشر', 'نسبة', 'استطلاع', 'سكان',
+                     'statistics', 'data', 'survey', 'report', 'index', 'census']
+
     for article in articles:
         if not article:
             continue
         title = article.get('title', '') or ''
         description = article.get('description', '') or ''
         full_content = article.get('full_content', '') or ''
-        content = f"{title} {description} {full_content[:500]}"
-        
-        if any(keyword in content for keyword in services_keywords):
-            categories['خدمات الحجاج'].append(article)
-        elif any(keyword in content for keyword in org_keywords):
-            categories['التنظيم والإدارة'].append(article)
-        elif any(keyword in content for keyword in tech_keywords):
-            categories['التقنية والابتكار'].append(article)
+        content = f"{title} {description} {full_content[:500]}".lower()
+
+        if any(keyword in content for keyword in family_keywords):
+            categories['الأسرة والطفولة'].append(article)
         elif any(keyword in content for keyword in health_keywords):
-            categories['الصحة والسلامة'].append(article)
+            categories['الصحة والرفاهية'].append(article)
+        elif any(keyword in content for keyword in society_keywords):
+            categories['المجتمع والقطاع غير الربحي'].append(article)
+        elif any(keyword in content for keyword in stats_keywords):
+            categories['الإحصاء والدراسات'].append(article)
         else:
             categories['أخبار عامة'].append(article)
-    
+
     return categories
 
 def extract_article_content(url, max_retries=3):
@@ -798,7 +1110,7 @@ def enhance_articles_with_content(articles, max_articles=15, weekly_mode=False, 
     return enhanced_articles
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, category=None):
-    """Get today's enhanced Hajj news with presenter-style summary."""
+    """Get today's enhanced Family news with presenter-style summary."""
     user_id = get_user_id(update)
     
     # Check usage limit
@@ -822,12 +1134,12 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, c
     if update.callback_query:
         await update.callback_query.answer()
         message = await update.callback_query.message.reply_text(
-            "🕋 جارٍ تجهيز موجز أخبار الحج والعمرة...\n📖 يتم الآن جمع الأخبار من وزارة الحج و CNN عربية...\n⏳ يرجى الانتظار للحظات.",
+            "🕋 جارٍ تجهيز موجز أخبار الأسرة والمجتمع...\n📖 يتم الآن جمع الأخبار من المصادر الرسمية والدولية...\n⏳ يرجى الانتظار للحظات.",
             parse_mode='Markdown'
         )
     else:
         message = await update.message.reply_text(
-            "🕋 جارٍ تجهيز موجز أخبار الحج والعمرة...\n📖 يتم الآن جمع الأخبار من وزارة الحج و CNN عربية...\n⏳ يرجى الانتظار للحظات.",
+            "🕋 جارٍ تجهيز موجز أخبار الأسرة والمجتمع...\n📖 يتم الآن جمع الأخبار من المصادر الرسمية والدولية...\n⏳ يرجى الانتظار للحظات.",
             parse_mode='Markdown'
         )
     
@@ -838,9 +1150,9 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, c
             parse_mode='Markdown'
         )
         
-        # Fetch news from Hajj sources
-        hajgov_articles = fetch_hajgov_news() or []
-        cnn_articles = fetch_cnn_hajj_news() or []
+        # Fetch news from Family sources
+        hajgov_articles = fetch_family_news() or []
+        cnn_articles = []
         logger.info(f"Fetched {len(hajgov_articles)} haj.gov.sa, {len(cnn_articles)} CNN Arabic")
         
         # Daily scope: restrict to past 7 days
@@ -857,7 +1169,7 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, c
         enhanced_cnn = enhance_articles_with_content(recent_cnn, max_articles=20) or []
         all_enhanced_articles = enhanced_hajgov + enhanced_cnn
         
-        with open("all_enhanced_hajj_articles.txt", "w", encoding="utf-8") as f:
+        with open("all_enhanced_family_articles.txt", "w", encoding="utf-8") as f:
             json.dump(all_enhanced_articles, f, ensure_ascii=False, indent=2)
         
         await message.edit_text(
@@ -872,9 +1184,9 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, c
         
         # Update message header for presenter style
         if category:
-            news_message = f"🕋 *موجز أخبار الحج والعمرة - {category}*\n" + news_message[news_message.find('\n')+1:]
+            news_message = f"🕋 *موجز أخبار الأسرة والمجتمع - {category}*\n" + news_message[news_message.find('\n')+1:]
         else:
-            news_message = f"🕋 *موجز أخبار الحج والعمرة اليومي*\n" + news_message[news_message.find('\n')+1:]
+            news_message = f"🕋 *موجز أخبار الأسرة والمجتمع اليومي*\n" + news_message[news_message.find('\n')+1:]
         
         # Create keyboard based on context
         keyboard = []
@@ -923,27 +1235,27 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE, page=1, c
 async def show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show category selection menu."""
     categories_message = """
-🕋 *تصنيفات أخبار الحج والعمرة*
+👨‍👩‍👧‍👦 *تصنيفات أخبار الأسرة والمجتمع*
 
 اختر تصنيفًا لاستكشاف الأخبار مع استخراج المحتوى الكامل:
 
-• 🕌 **خدمات الحجاج** - النقل، الإسكان، التفويج، التصاريح، الحملات
-• 📋 **التنظيم والإدارة** - الوزارة، الهيئات، الخطط، الاستعدادات
-• 💡 **التقنية والابتكار** - التطبيقات، المنصات الرقمية، الذكاء الاصطناعي
-• 🏥 **الصحة والسلامة** - الخدمات الطبية، الوقاية، الأمن والسلامة
-• 📰 **أخبار عامة** - أخبار حج وعمرة متنوعة
+• 👶 **الأسرة والطفولة** - الأمومة والأبوة، التربية، الزواج، شؤون الأبناء
+• 💚 **الصحة والرفاهية** - الصحة النفسية والبدنية، التغذية، جودة الحياة
+• 🤝 **المجتمع والقطاع غير الربحي** - العمل التطوعي، الجمعيات، المبادرات المجتمعية
+• 📊 **الإحصاء والدراسات** - البيانات، المؤشرات، الاستطلاعات، التقارير البحثية
+• 📰 **أخبار عامة** - أخبار الأسرة والمجتمع المتنوعة
 
 *🆕 مزايا محسّنة لكل تصنيف:*
 📖 استخراج المحتوى الكامل للمقالات
 🧠 ملخصات ذكية مخصصة لكل تصنيف
 📄 تقارير PDF مفصلة مع محتوى كامل
     """
-    
+
     keyboard = [
-        [InlineKeyboardButton("🕌 خدمات الحجاج", callback_data='category_خدمات الحجاج_1')],
-        [InlineKeyboardButton("📋 التنظيم والإدارة", callback_data='category_التنظيم والإدارة_1')],
-        [InlineKeyboardButton("💡 التقنية والابتكار", callback_data='category_التقنية والابتكار_1')],
-        [InlineKeyboardButton("🏥 الصحة والسلامة", callback_data='category_الصحة والسلامة_1')],
+        [InlineKeyboardButton("👶 الأسرة والطفولة", callback_data='category_الأسرة والطفولة_1')],
+        [InlineKeyboardButton("💚 الصحة والرفاهية", callback_data='category_الصحة والرفاهية_1')],
+        [InlineKeyboardButton("🤝 المجتمع والقطاع غير الربحي", callback_data='category_المجتمع والقطاع غير الربحي_1')],
+        [InlineKeyboardButton("📊 الإحصاء والدراسات", callback_data='category_الإحصاء والدراسات_1')],
         [InlineKeyboardButton("📰 أخبار عامة", callback_data='category_أخبار عامة_1')],
         [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data='main_menu')]
     ]
@@ -969,7 +1281,7 @@ def format_news_message(hajgov_articles, cnn_articles, extra_articles=None, extr
     all_articles = (hajgov_articles or []) + (cnn_articles or []) + (extra_articles or []) + (extra2 or []) + (extra3 or [])
 
     
-    if category and category in ['خدمات الحجاج', 'التنظيم والإدارة', 'التقنية والابتكار', 'الصحة والسلامة', 'أخبار عامة']:
+    if category and category in ['الأسرة والطفولة', 'الصحة والرفاهية', 'المجتمع والقطاع غير الربحي', 'الإحصاء والدراسات', 'أخبار عامة']:
         # Show articles from specific category
         categorized = categorize_articles(all_articles)
         category_articles = categorized.get(category, [])
@@ -980,7 +1292,7 @@ def format_news_message(hajgov_articles, cnn_articles, extra_articles=None, extr
         
         category_label = category
 
-        message = f"🕋 *أخبار الحج والعمرة - {category_label}* (محسّنة)\n"
+        message = f"🕋 *أخبار الأسرة والمجتمع - {category_label}* (محسّنة)\n"
         message += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         message += f"📄 الصفحة {page} من {total_pages} | عدد المقالات: {len(category_articles)}\n"
         
@@ -1012,7 +1324,7 @@ def format_news_message(hajgov_articles, cnn_articles, extra_articles=None, extr
     
     else:
         # Show main summary with top articles
-        message = f"⭐ *تحديث أخبار الحج والعمرة* (محسّن مع المحتوى الكامل)\n"
+        message = f"⭐ *تحديث أخبار الأسرة والمجتمع* (محسّن مع المحتوى الكامل)\n"
         message += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
         
         # Summary Statistics
@@ -1076,7 +1388,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await get_news(update, context, page, category)
 
 async def keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allow the user to set or clear Hajj and Umrah-specific keywords."""
+    """Allow the user to set or clear Family and Society-specific keywords."""
     message = update.message or update.effective_message
     if not message:
         return
@@ -1103,7 +1415,7 @@ async def keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ يرجى استخدام الصيغة التالية (بالإنجليزية):\n"
                 "`Primary Keyword | secondary keyword 1, secondary keyword 2`\n"
                 "مثال:\n"
-                "`Hajj News 2026 | hajj, umrah, pilgrimage, makkah`",
+                "`Family News 2026 | family, parenting, wellbeing, society`",
                 parse_mode='Markdown'
             )
         return
@@ -1133,7 +1445,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ لم أتمكن من فهم الصيغة.\n"
                 "يرجى الإرسال بالشكل التالي (بالإنجليزية):\n"
                 "`Primary Keyword | secondary keyword 1, secondary keyword 2`\n"
-                "مثال: `Hajj News 2026 | hajj, umrah, pilgrimage, makkah`",
+                "مثال: `Family News 2026 | family, parenting, wellbeing, society`",
                 parse_mode='Markdown'
             )
         return
@@ -1156,7 +1468,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = raw_text.lower()
     
-    if any(word in text for word in ['news', 'hajj', 'حج', 'عمرة', 'update', 'enhanced', 'أخبار', 'حجاج']):
+    if any(word in text for word in ['news', 'أخبار', 'family', 'أسرة', 'مجتمع', 'update', 'enhanced', 'مقال']):
         await get_news(update, context)
     elif any(word in text for word in ['weekly', 'week', 'أسبوع', 'أسبوعي']):
         await generate_weekly_blogs(update, context)
@@ -1178,12 +1490,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "⭐ أهلاً بك! أنا بوت أخبار الحج والعمرة المحسّنة مع استخراج كامل لمحتوى المقالات.\n\n"
+            "⭐ أهلاً بك! أنا بوت أخبار الأسرة والمجتمع المحسّنة مع استخراج كامل لمحتوى المقالات.\n\n"
             "اختر أحد الخيارات في الأسفل أو استخدم هذه الأوامر:\n"
-            "• /news - الحصول على أخبار الحج والعمرة المحسّنة\n"
+            "• /news - الحصول على أخبار الأسرة والمجتمع المحسّنة\n"
             "• /weekly - توليد تقارير/مدونات أسبوعية\n"
             "• /monthly - توليد تقارير/مدونات شهرية\n"
-            "• /magazine - توليد مجلة الحج والعمرة الشهرية (PDF)\n"
+            "• /magazine - توليد مجلة الأسرة والمجتمع الشهرية (PDF)\n"
             "• /keywords - إعداد الكلمات المفتاحية (بالإنجليزية) لتحسين محركات البحث\n"
             "• /categories - تصفح الأخبار حسب التصنيف\n"
             "• /help - المزيد من المعلومات",
@@ -1194,8 +1506,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     welcome_message = """
-⭐ 👋 مرحباً بك! أنا مساعدك الإخباري الذكي لقطاع الحج والعمرة
-تم تصميمي خصيصاً لأكون رفيقك اليومي في متابعة كل ما يخص أخبار وخدمات الحج والعمرة.
+⭐ 👋 مرحباً بك! أنا مساعدك الإخباري الذكي لقطاع الأسرة والمجتمع
+تم تصميمي خصيصاً لأكون رفيقك اليومي في متابعة كل ما يخص أخبار وخدمات الأسرة والمجتمع.
 أقوم بجمع أحدث المستجدات، تحليلها، وتلخيصها لك بدقة واحترافية عالية،
 لتكون دائماً في قلب الحدث دون إهدار وقتك في البحث بين المصادر المتعددة.
 
@@ -1359,27 +1671,27 @@ def call_claude_api(system_message, user_message, api_key=None, model=None, max_
         return None, f"AWS Bedrock Error: {error_msg}"
 
 def categorize_articles_for_blogs(articles):
-    """Categorize Hajj and Umrah articles into two main blog themes"""
-    
+    """Categorize Family & Society articles into two main blog themes"""
+
     if not articles:
         logger.warning("No articles provided to categorize_articles_for_blogs")
         return {
             'management': [],
             'improvement': []
         }
-    
-    # Blog 1: Pilgrim Services & Organization
+
+    # Blog 1: Family, Society & Nonprofit
     management_keywords = [
-        'خدمات', 'حجاج', 'معتمرين', 'تفويج', 'نقل', 'إسكان', 'سكن',
-        'إعاشة', 'تغذية', 'مخيمات', 'حملات', 'تصاريح', 'تأشيرات',
-        'نسك', 'تنظيم', 'إدارة', 'وزارة', 'هيئة', 'إشراف', 'خطة'
+        'أسرة', 'طفل', 'أطفال', 'طفولة', 'أمومة', 'أبوة', 'والدين', 'زواج',
+        'أبناء', 'تربية', 'مجتمع', 'تطوع', 'جمعية', 'غير ربحي', 'خيري',
+        'مبادرة', 'تنمية', 'مسؤولية اجتماعية'
     ]
-    
-    # Blog 2: Technology, Health & Innovation
+
+    # Blog 2: Health, Wellbeing, Statistics & Studies
     improvement_keywords = [
-        'تقنية', 'تطبيق', 'رقمي', 'ذكاء اصطناعي', 'إلكتروني', 'منصة',
-        'صحة', 'سلامة', 'طبي', 'مستشفى', 'إسعاف', 'وقاية',
-        'ابتكار', 'تحول رقمي', 'تطوير', 'تحسين', 'أمن'
+        'صحة', 'صحية', 'رفاهية', 'جودة الحياة', 'نفسية', 'تغذية', 'طبي',
+        'وقاية', 'سلامة', 'رياضة', 'إحصاء', 'إحصائية', 'بيانات', 'دراسة',
+        'مؤشر', 'نسبة', 'استطلاع', 'سكان'
     ]
     
     management_articles = []
@@ -1463,11 +1775,11 @@ def process_arabic_text(text):
     bidi_text = get_display(reshaped_text)
     return bidi_text
 
-def create_hajj_blog_pdf(blog_content, blog_title, is_temp_file=True):
-    """Create a beautifully formatted Hajj and Umrah blog-style PDF"""
+def create_family_blog_pdf(blog_content, blog_title, is_temp_file=True):
+    """Create a beautifully formatted Family and Society blog-style PDF"""
     
     if not blog_content or not blog_title:
-        logger.warning("No blog content or title provided to create_hajj_blog_pdf")
+        logger.warning("No blog content or title provided to create_family_blog_pdf")
         return None
     
     if is_temp_file:
@@ -1552,7 +1864,7 @@ def create_hajj_blog_pdf(blog_content, blog_title, is_temp_file=True):
     
     # Add logo at the top right corner if available
     template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-    logo_path = os.path.join(template_dir, 'images', 'Logo.png')
+    logo_path = os.path.join(template_dir, 'images', 'mawadda-logo.png')
     if os.path.exists(logo_path):
         try:
             # Calculate available width (A4 width - left margin - right margin)
@@ -1572,21 +1884,6 @@ def create_hajj_blog_pdf(blog_content, blog_title, is_temp_file=True):
     
     # Add blog title
     content.append(Paragraph(process_arabic_text(blog_title), blog_title_style))
-    
-    # Add metadata
-    date_str = datetime.now().strftime('%B %d, %Y')
-    week_range = f"{(datetime.now() - timedelta(days=7)).strftime('%B %d')} - {datetime.now().strftime('%B %d, %Y')}"
-    month_range = f"{(datetime.now() - timedelta(days=30)).strftime('%B %d')} - {datetime.now().strftime('%B %d, %Y')}"
-    
-    if 'يومي' in blog_title:
-        meta_text = f"تقرير سياحي يومي • تم الإنشاء في {date_str}"
-    elif 'أسبوعي' in blog_title:
-        meta_text = f"تقرير سياحي أسبوعي • {week_range} • تم الإنشاء في {date_str}"
-    elif 'شهري' in blog_title:
-        meta_text = f"تقرير سياحي شهري • {month_range} • تم الإنشاء في {date_str}"
-    else:
-        meta_text = f"تقرير سياحي • تم الإنشاء في {date_str}"
-    content.append(Paragraph(process_arabic_text(meta_text), blog_meta_style))
     
     content.append(Spacer(1, 10))
     
@@ -1627,10 +1924,10 @@ def create_hajj_blog_pdf(blog_content, blog_title, is_temp_file=True):
     # Build the PDF
     try:
         doc.build(content)
-        logger.info(f"Successfully created Hajj news blog PDF: {filename}")
+        logger.info(f"Successfully created Family news blog PDF: {filename}")
         return filename
     except Exception as e:
-        logger.error(f"Error creating Hajj news blog PDF: {str(e)}")
+        logger.error(f"Error creating Family news blog PDF: {str(e)}")
         return None
 
 async def generate_pdf_report(update: Update, context: ContextTypes.DEFAULT_TYPE, category=None):
@@ -1646,19 +1943,19 @@ async def generate_pdf_report(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     try:
         await status_message.edit_text(
-            "📄 *الخطوة 1/2:* توليد محتوى تقريري بأسلوب مدونة سياحية...",
+            "📄 *الخطوة 1/2:* توليد محتوى تقريري بأسلوب مدونة متخصصة...",
             parse_mode='Markdown'
         )
         
         # Load articles from saved file
-        if not os.path.exists("all_enhanced_hajj_articles.txt"):
+        if not os.path.exists("all_enhanced_family_articles.txt"):
             await status_message.edit_text(
                 "❌ لا توجد مقالات متاحة حاليًا. يرجى تشغيل الأمر /news أولاً لجلب المقالات.",
                 parse_mode='Markdown'
             )
             return
         
-        with open("all_enhanced_hajj_articles.txt", "r", encoding="utf-8") as f:
+        with open("all_enhanced_family_articles.txt", "r", encoding="utf-8") as f:
             all_articles = json.load(f)
         
         # Prepare articles according to scope
@@ -1666,20 +1963,20 @@ async def generate_pdf_report(update: Update, context: ContextTypes.DEFAULT_TYPE
         if category and category != 'all':
             categorized = categorize_articles(all_articles)
             articles_for_report = categorized.get(category, [])
-            blog_title = f"تقرير الحج والعمرة اليومي – {category}"
-            blog_content = generate_daily_hajj_blog_with_ai(articles_for_report, category, keywords=user_keywords)
+            blog_title = f"تقرير الأسرة والمجتمع اليومي – {category}"
+            blog_content = generate_daily_family_blog_with_ai(articles_for_report, category, keywords=user_keywords)
         else:
             articles_for_report = all_articles
-            blog_title = "تقرير الحج والعمرة اليومي"
-            blog_content = generate_daily_hajj_blog_with_ai(articles_for_report, None, keywords=user_keywords)
+            blog_title = "تقرير الأسرة والمجتمع اليومي"
+            blog_content = generate_daily_family_blog_with_ai(articles_for_report, None, keywords=user_keywords)
 
         # Fallback if model returned too-short, empty content, or error message
-        if not blog_content or len(blog_content.strip()) < 100 or (blog_content.startswith("# التقرير اليومي للحج والعمرة") and "Error" in blog_content):
+        if not blog_content or len(blog_content.strip()) < 100 or (blog_content.startswith("# التقرير اليومي للأسرة والمجتمع") and "Error" in blog_content):
             logger.warning("Model returned empty/short content or error. Using fallback blog content.")
-            blog_content = build_fallback_hajj_blog_content(articles_for_report, category)
+            blog_content = build_fallback_family_blog_content(articles_for_report, category)
         
         # Build PDF using blog formatter for consistent look
-        pdf_filename = create_hajj_blog_pdf(blog_content, blog_title, is_temp_file=True)
+        pdf_filename = create_family_blog_pdf(blog_content, blog_title, is_temp_file=True)
         report_title = blog_title
         
         await status_message.edit_text(
@@ -1702,7 +1999,7 @@ async def generate_pdf_report(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             # Update status message
             await status_message.edit_text(
-                "✅ تم توليد تقرير PDF محسّن وإرساله بنجاح!\n📖 يشمل محتوى كاملًا للمقالات وتحليلًا سياحيًا تفصيليًا.",
+                "✅ تم توليد تقرير PDF محسّن وإرساله بنجاح!\n📖 يشمل محتوى كاملًا للمقالات وتحليلًا تفصيليًا.",
                 parse_mode='Markdown'
             )
         else:
@@ -1726,11 +2023,11 @@ async def generate_pdf_report(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception as reply_error:
                 logger.error(f"Error sending reply: {reply_error}")
 
-def generate_daily_hajj_blog_with_ai(articles, category=None, keywords=None):
-    """Generate a daily Hajj and Umrah blog-style summary so PDFs match weekly blog formatting."""
+def generate_daily_family_blog_with_ai(articles, category=None, keywords=None):
+    """Generate a daily Family and Society blog-style summary so PDFs match weekly blog formatting."""
     if not articles:
-        logger.warning("No articles provided to generate_daily_hajj_blog_with_ai")
-        return "# التقرير اليومي للحج والعمرة\n\nلا توجد مقالات متاحة اليوم."
+        logger.warning("No articles provided to generate_daily_family_blog_with_ai")
+        return "# التقرير اليومي للأسرة والمجتمع\n\nلا توجد مقالات متاحة اليوم."
     
     # Prepare content from articles (shorter excerpts for daily)
     max_daily_articles = min(len(articles), 40)
@@ -1757,22 +2054,22 @@ Content: {full_content or 'No content available'}
     
     # Choose focus
     if category in [
-        "خدمات الحجاج",
-        "التنظيم والإدارة",
-        "التقنية والابتكار",
-        "الصحة والسلامة",
+        "الأسرة والطفولة",
+        "الصحة والرفاهية",
+        "المجتمع والقطاع غير الربحي",
+        "الإحصاء والدراسات",
         "أخبار عامة"
     ]:
         title_suffix = f" – {category}"
         intro_target = f"أهم تطورات {category} اليوم"
     else:
         title_suffix = ""
-        intro_target = "أهم تطورات الحج والعمرة اليوم"
+        intro_target = "أهم تطورات الأسرة والمجتمع اليوم"
     
     # System message (static, will be cached)
     system_message = (
         "You are a professional Arabic writer. "
-        "You write concise, structured daily blog reports about Hajj, Umrah, and pilgrimage news in MODERN STANDARD ARABIC. "
+        "You write concise, structured daily blog reports about Family, Society, and family news in MODERN STANDARD ARABIC. "
         "All visible content, headings, and paragraphs must be in Arabic, but you may read/analyze English source text. "
         "Keep the style صحفي احترافي وسهل القراءة، واستخدم عناوين Markdown."
     )
@@ -1788,26 +2085,26 @@ Content: {full_content or 'No content available'}
 # [اكتب عنوانًا عربيًا جذابًا لليوم]
 
 ## نظرة سريعة
-[فقرة من 80–120 كلمة تلخص أهم محاور اليوم والعناوين الرئيسية في أخبار الحج والعمرة]
+[فقرة من 80–120 كلمة تلخص أهم محاور اليوم والعناوين الرئيسية في أخبار الأسرة والمجتمع]
 
 ## أبرز الأخبار
-[2-3 فقرات قصيرة، كل منها 80–120 كلمة، تربط بين أهم التحديثات في مجال الحج والعمرة]
+[2-3 فقرات قصيرة، كل منها 80–120 كلمة، تربط بين أهم التحديثات في مجال الأسرة والمجتمع]
 
 ## تطورات لافتة
 [قائمة نقطية من 6–8 عناصر مختصرة، كل عنصر 1–2 جملة، تشير إلى شركات أو معايير أو نتائج محددة]
 
 ## السوق والتأثير
-[1–2 فقرة عن تأثير الأخبار على قطاع الحج والعمرة والصناعة]
+[1–2 فقرة عن تأثير الأخبار على قطاع الأسرة والمجتمع والصناعة]
 
 ## ما الذي نترقبه لاحقًا
-[3–5 نقاط حول الإعلانات المتوقعة أو الاتجاهات في مجال الحج والعمرة الصاعدة]
+[3–5 نقاط حول الإعلانات المتوقعة أو الاتجاهات في مجال الأسرة والمجتمع الصاعدة]
 
 متطلبات أساسية:
 - استخدم عناوين الأقسام العربية أعلاه كما هي مع تنسيق Markdown (##).
 - امزج المعلومات من عدة مقالات، ولا تكتفِ بسردها واحدة تلو الأخرى.
 - اذكر الأسماء والأرقام والمعايير والمنظمات كلما أمكن ذلك.
-- اجعل الأسلوب صحفيًا احترافيًا وواضحًا، مناسبًا لتقرير يومي عن الحج والعمرة.
-- ركّز دائمًا على صلة المحتوى بمجال الحج والعمرة.
+- اجعل الأسلوب صحفيًا احترافيًا وواضحًا، مناسبًا لتقرير يومي عن الأسرة والمجتمع.
+- ركّز دائمًا على صلة المحتوى بمجال الأسرة والمجتمع.
 
 مقالات للتحليل ({max_daily_articles} مقالاً):
 {news_content}
@@ -1823,21 +2120,21 @@ Content: {full_content or 'No content available'}
     )
     
     if error:
-        return f"# التقرير اليومي للحج والعمرة{title_suffix}\n\nحدث خطأ أثناء توليد المحتوى: {error}"
+        return f"# التقرير اليومي للأسرة والمجتمع{title_suffix}\n\nحدث خطأ أثناء توليد المحتوى: {error}"
     
     if not content:
-        return f"# التقرير اليومي للحج والعمرة{title_suffix}\n\nتعذّر توليد المحتوى اليوم."
+        return f"# التقرير اليومي للأسرة والمجتمع{title_suffix}\n\nتعذّر توليد المحتوى اليوم."
     
     if not content.lstrip().startswith('#'):
-        prefix_title = f"# التقرير اليومي للحج والعمرة{title_suffix}\n\n"
+        prefix_title = f"# التقرير اليومي للأسرة والمجتمع{title_suffix}\n\n"
         return prefix_title + content
     
     logger.info(f"Model content length: {len(content)}")
     return content
 
-def build_fallback_hajj_blog_content(articles, category=None):
+def build_fallback_family_blog_content(articles, category=None):
     """Build a minimal, readable daily report from available articles when the model response is empty."""
-    heading = f"# التقرير اليومي للحج والعمرة – {category}" if category else "# التقرير اليومي للحج والعمرة"
+    heading = f"# التقرير اليومي للأسرة والمجتمع – {category}" if category else "# التقرير اليومي للأسرة والمجتمع"
     if not articles:
         return f"{heading}\n\nلا توجد مقالات متاحة اليوم."
     lines = [heading, "", "## أهم العناوين", ""]
@@ -1861,12 +2158,12 @@ def build_fallback_hajj_blog_content(articles, category=None):
     lines += ["", "## ملاحظات", "تم إنشاء هذا الملخص الاحتياطي بسبب عدم توفر استجابة من نموذج الذكاء الاصطناعي."]
     return "\n".join(lines)
 
-def generate_hajj_blog_with_ai(articles, blog_theme, time_period="weekly", keywords=None):
-    """Generate a Hajj and Umrah blog post using Claude AI"""
+def generate_family_blog_with_ai(articles, blog_theme, time_period="weekly", keywords=None):
+    """Generate a Family and Society blog post using Claude AI"""
     
     if not articles:
-        logger.warning(f"No articles provided to generate_hajj_blog_with_ai for {blog_theme}")
-        return "تعذّر إنشاء مدونة الحج والعمرة: لا توجد مقالات كافية للتحليل."
+        logger.warning(f"No articles provided to generate_family_blog_with_ai for {blog_theme}")
+        return "تعذّر إنشاء مدونة الأسرة والمجتمع: لا توجد مقالات كافية للتحليل."
     
     # Prepare content from articles
     news_content = ""
@@ -1895,39 +2192,39 @@ Content: {full_content or 'No content available'}
 """
     
     # Determine period-specific language (Arabic labels)
-    period_adj = "أسبوعية" if time_period == "weekly" else "شهرية"
-    period_cap = "هذا الأسبوع" if time_period == "weekly" else "هذا الشهر"
-    period_next = "الأسبوع القادم" if time_period == "weekly" else "الشهر القادم"
+    period_adj = {"daily": "يومية", "weekly": "أسبوعية", "monthly": "شهرية"}.get(time_period, "أسبوعية")
+    period_cap = {"daily": "اليوم", "weekly": "هذا الأسبوع", "monthly": "هذا الشهر"}.get(time_period, "هذا الأسبوع")
+    period_next = {"daily": "غدًا", "weekly": "الأسبوع القادم", "monthly": "الشهر القادم"}.get(time_period, "الأسبوع القادم")
     
     # Create theme-specific prompts
     if blog_theme == "management":
-        blog_focus = "خدمات الحجاج والتنظيم"
+        blog_focus = "شؤون الأسرة والتنظيم"
         blog_angle = (
-            "ركّز على تطورات خدمات الحجاج، والتنظيم، والاستعدادات، "
-            "والتشريعات والسياسات المتعلقة بالحج والعمرة، والتطورات في قطاع الحج. "
-            "الجمهور المستهدف هو المسؤولون عن الحج والعمرة، والمنظمون، والمهتمون بالقطاع. "
-            "أبرز استراتيجيات خدمة الحجاج، والتطوير، والشراكات، والابتكارات في القطاع."
+            "ركّز على تطورات شؤون الأسرة، والتنظيم، والاستعدادات، "
+            "والتشريعات والسياسات المتعلقة بالأسرة والمجتمع، والتطورات في قطاع الأسرة والمجتمع. "
+            "الجمهور المستهدف هو المسؤولون عن الأسرة والمجتمع، والمنظمون، والمهتمون بالقطاع. "
+            "أبرز استراتيجيات خدمة الأسر، والتطوير، والشراكات، والابتكارات في القطاع."
         )
     elif blog_theme == "combined":
-        blog_focus = "أخبار الحج والعمرة الشاملة"
+        blog_focus = "أخبار الأسرة والمجتمع الشاملة"
         blog_angle = (
-            "ركّز على كافة جوانب الحج والعمرة بما في ذلك خدمات الحجاج، التنظيم الإداري، التقنية والابتكار، "
+            "ركّز على كافة جوانب الأسرة والمجتمع بما في ذلك شؤون الأسرة، التنظيم الإداري، الإحصاء والدراسات، "
             "والتطورات الصحية والأمنية. "
-            "الجمهور المستهدف هو المتابعون الشاملون لقطاع الحج والعمرة والمهتمون بجميع مستجداته. "
+            "الجمهور المستهدف هو المتابعون الشاملون لقطاع الأسرة والمجتمع والمهتمون بجميع مستجداته. "
             "أبرز أهم الأخبار والقرارات والتطورات التكنولوجية والتنظيمية في القطاع."
         )
     else:  # improvement
-        blog_focus = "التقنية والصحة والابتكار في الحج"
+        blog_focus = "التقنية والصحة والرفاهية"
         blog_angle = (
-            "ركّز على التقنية والابتكار والتحول الرقمي في خدمة الحجاج والمعتمرين، "
-            "والخدمات الصحية والسلامة والأمن خلال موسم الحج، والمبادرات التطويرية. "
-            "الجمهور المستهدف هو المهتمون بتطوير خدمات الحج، والمنظّمون، ومزودو الخدمات. "
-            "أبرز الاتجاهات الصاعدة، والابتكارات، وأفضل الممارسات في خدمة ضيوف الرحمن."
+            "ركّز على الإحصاء والدراسات والتحول الرقمي في خدمة الأسر والأفراد، "
+            "والخدمات الصحية والسلامة والأمن خلال الشأن الأسري، والمبادرات التطويرية. "
+            "الجمهور المستهدف هو المهتمون بتطوير خدمات الأسرة، والمنظّمون، ومزودو الخدمات. "
+            "أبرز الاتجاهات الصاعدة، والابتكارات، وأفضل الممارسات في خدمة أفراد الأسرة."
         )
     
     system_message = (
-        "You are a professional Arabic Hajj and Umrah industry blogger. "
-        "You always write engaging, insightful blog posts in MODERN STANDARD ARABIC about Hajj, Umrah, and pilgrimage developments. "
+        "You are a professional Arabic Family and Society industry blogger. "
+        "You always write engaging, insightful blog posts in MODERN STANDARD ARABIC about Family, Society, and family developments. "
         "Use clear structure, strong headings in Arabic, and actionable insights. "
         "Always use proper markdown formatting for headers, and keep the tone صحفي احترافي وجذّاب."
     )
@@ -1946,7 +2243,7 @@ Content: {full_content or 'No content available'}
     [مقدمة مشوّقة من 150 كلمة تقريبًا تجذب القارئ وتشرح سياق التقرير]
 
     ## أهم قصة في {period_cap}
-    [250–300 كلمة تغطي التطور الأهم في أخبار الحج والعمرة لهذا {period_cap}]
+    [250–300 كلمة تغطي التطور الأهم في أخبار الأسرة والمجتمع لهذا {period_cap}]
 
     ## تطور رئيسي ثانٍ
     [250–300 كلمة عن ثاني أهم تطور]
@@ -1961,7 +2258,7 @@ Content: {full_content or 'No content available'}
     [200–250 كلمة تغطي 6–8 تطورات إضافية بشكل موجز]
 
     ## مراقبة السوق
-    [150–200 كلمة عن الاستثمارات، الشراكات، وأخبار الأعمال في مجال الحج والعمرة]
+    [150–200 كلمة عن الاستثمارات، الشراكات، وأخبار الأعمال في مجال الأسرة والمجتمع]
 
     ## ما الذي ينتظرنا لاحقًا
     [100–150 كلمة تستشرف ما قد يحدث في {period_next}]
@@ -1977,7 +2274,7 @@ Content: {full_content or 'No content available'}
     - استشهد بما لا يقل عن 15–20 مقالًا مختلفًا داخل التدوينة.
     - اذكر أسماء الشركات، المعايير، الأرقام، التواريخ، والمصادر كلما أمكن.
     - اجعل الأسلوب عربيًا صحفيًا مهنيًا وجذابًا.
-    - اجعل كل قسم غنيًا بالمعلومات وقابلًا للاستخدام لخبراء الحج والعمرة.
+    - اجعل كل قسم غنيًا بالمعلومات وقابلًا للاستخدام لخبراء الأسرة والمجتمع.
     - أمامك {article_count} مقالًا، فاستخدم هذا التنوع في بناء الصورة الكلية.
 
     محتوى المقالات للتحليل ({article_count} مقالاً):
@@ -2000,7 +2297,7 @@ Content: {full_content or 'No content available'}
         return content
 
 async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate comprehensive weekly Hajj and Umrah blog posts."""
+    """Generate comprehensive weekly Family and Society blog posts."""
     user_id = get_user_id(update)
     
     # Check usage limit
@@ -2023,32 +2320,32 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
     if update.callback_query:
         await update.callback_query.answer()
         message = await update.callback_query.message.reply_text(
-            "📝 *مولّد المدونات الأسبوعية للحج والعمرة*\n\n⏳ جارٍ إعداد تحليل أسبوعي شامل...\n📊 سيتم تحليل أخبار الحج والعمرة لآخر 7 أيام\n⏰ الزمن المتوقع: 3–5 دقائق\n\nيرجى الانتظار...",
+            "📝 *مولّد المدونات الأسبوعية للأسرة والمجتمع*\n\n⏳ جارٍ إعداد تحليل أسبوعي شامل...\n📊 سيتم تحليل أخبار الأسرة والمجتمع لآخر 7 أيام\n⏰ الزمن المتوقع: 3–5 دقائق\n\nيرجى الانتظار...",
             parse_mode='Markdown'
         )
     else:
         message = await update.message.reply_text(
-            "📝 *مولّد المدونات الأسبوعية للحج والعمرة*\n\n⏳ جارٍ إعداد تحليل أسبوعي شامل...\n📊 سيتم تحليل أخبار الحج والعمرة لآخر 7 أيام\n⏰ الزمن المتوقع: 3–5 دقائق\n\nيرجى الانتظار...",
+            "📝 *مولّد المدونات الأسبوعية للأسرة والمجتمع*\n\n⏳ جارٍ إعداد تحليل أسبوعي شامل...\n📊 سيتم تحليل أخبار الأسرة والمجتمع لآخر 7 أيام\n⏰ الزمن المتوقع: 3–5 دقائق\n\nيرجى الانتظار...",
             parse_mode='Markdown'
         )
     
     try:
         await message.edit_text(
-            "📝 *الخطوة 1/4:* جلب أخبار الحج والعمرة الأسبوعية...\n📡 يتم الآن جمع المقالات من آخر 7 أيام...",
+            "📝 *الخطوة 1/4:* جلب أخبار الأسرة والمجتمع الأسبوعية...\n📡 يتم الآن جمع المقالات من آخر 7 أيام...",
             parse_mode='Markdown'
         )
         
-        hajgov_articles = fetch_hajgov_news() or []
-        cnn_articles = fetch_cnn_hajj_news() or []
+        hajgov_articles = fetch_family_news() or []
+        cnn_articles = []
 
         logger.info(f"Fetched {len(hajgov_articles)} haj.gov.sa, {len(cnn_articles)} CNN Arabic")
         
         await message.edit_text(
-            "📝 *الخطوة 2/4:* تصفية المقالات...\n🔍 تصفية أخبار الحج والعمرة...",
+            "📝 *الخطوة 2/4:* تصفية المقالات...\n🔍 تصفية أخبار الأسرة والمجتمع...",
             parse_mode='Markdown'
         )
         
-        # No filtering needed - sources are already Hajj-specific
+        # No filtering needed - sources are already Family-specific
 
         recent_hajgov = filter_recent_articles(hajgov_articles, days=7) or []
         recent_cnn = filter_recent_articles(cnn_articles, days=7) or []
@@ -2058,7 +2355,7 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
         
         if not all_articles:
             await message.edit_text(
-                "❌ لم يتم العثور على أخبار حج وعمرة كافية. يرجى المحاولة لاحقًا.",
+                "❌ لم يتم العثور على أخبار أسرة ومجتمع كافية. يرجى المحاولة لاحقًا.",
                 parse_mode='Markdown'
             )
             return
@@ -2084,7 +2381,7 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
         # Generate Combined Blog
         combined_blog = None
         if enhanced_articles:
-            combined_blog = generate_hajj_blog_with_ai(
+            combined_blog = generate_family_blog_with_ai(
                 enhanced_articles, "combined", "weekly", keywords=user_keywords
             )
         
@@ -2097,15 +2394,15 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
         combined_filename = None
         
         if combined_blog:
-            combined_filename = create_hajj_blog_pdf(
+            combined_filename = create_family_blog_pdf(
                 combined_blog,
-                "التقرير الأسبوعي الشامل للحج والعمرة",
+                "التقرير الأسبوعي الشامل للأسرة والمجتمع",
                 is_temp_file=True
             )
         
         # Step 6: Send the blog PDFs
         await message.edit_text(
-            "📝 *الخطوة 6/6:* إرسال ملفات PDF...\n📤 يتم الآن إرسال الرؤى والتحليلات الأسبوعية للحج والعمرة...",
+            "📝 *الخطوة 6/6:* إرسال ملفات PDF...\n📤 يتم الآن إرسال الرؤى والتحليلات الأسبوعية للأسرة والمجتمع...",
             parse_mode='Markdown'
         )
         
@@ -2114,8 +2411,8 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
                 with open(combined_filename, 'rb') as pdf_file:
                     await message.reply_document(
                         document=pdf_file,
-                        filename=f"Hajj_Weekly_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        caption="📝 **التقرير الأسبوعي الشامل للحج والعمرة**\n💼 تحليل شامل لكافة التطورات والأخبار في قطاع الحج والعمرة",
+                        filename=f"Family_Weekly_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        caption="📝 **التقرير الأسبوعي الشامل للأسرة والمجتمع**\n💼 تحليل شامل لكافة التطورات والأخبار في قطاع الأسرة والمجتمع",
                         parse_mode='Markdown'
                     )
                 os.unlink(combined_filename)
@@ -2126,7 +2423,7 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
         combined_status = "Generated" if combined_blog else "Skipped (insufficient data)"
         
         success_message = f"""
- ✅ **تم الانتهاء من توليد التقرير الأسبوعي الشامل للحج والعمرة بنجاح!**
+ ✅ **تم الانتهاء من توليد التقرير الأسبوعي الشامل للأسرة والمجتمع بنجاح!**
 
  📊 **إحصائيات المعالجة:**
  • إجمالي المقالات التي تم تحليلها: {len(enhanced_articles)}
@@ -2134,7 +2431,7 @@ async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TY
  • نطاق التغطية الأسبوعية: {(datetime.now() - timedelta(days=7)).strftime('%B %d')} - {datetime.now().strftime('%B %d, %Y')}
 
  📝 **التقارير التي تم توليدها:**
- • التقرير الأسبوعي الشامل للحج والعمرة - {combined_status}
+ • التقرير الأسبوعي الشامل للأسرة والمجتمع - {combined_status}
 
  التقرير يحتوي على أقسام منظمة وتحليل متعمق وتنسيق احترافي!
         """
@@ -2162,7 +2459,7 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await generate_weekly_blogs(update, context)
 
 async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate comprehensive monthly Hajj and Umrah blog posts."""
+    """Generate comprehensive monthly Family and Society blog posts."""
     user_id = get_user_id(update)
     
     # Check usage limit
@@ -2185,32 +2482,32 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
     if update.callback_query:
         await update.callback_query.answer()
         message = await update.callback_query.message.reply_text(
-            "📝 *مولّد المدونات الشهرية للحج والعمرة*\n\n⏳ جارٍ إعداد تحليل شهري شامل...\n📊 سيتم تحليل أخبار الحج والعمرة لآخر 30 يومًا\n⏰ الزمن المتوقع: 5–10 دقائق\n\nيرجى الانتظار...",
+            "📝 *مولّد المدونات الشهرية للأسرة والمجتمع*\n\n⏳ جارٍ إعداد تحليل شهري شامل...\n📊 سيتم تحليل أخبار الأسرة والمجتمع لآخر 30 يومًا\n⏰ الزمن المتوقع: 5–10 دقائق\n\nيرجى الانتظار...",
             parse_mode='Markdown'
         )
     else:
         message = await update.message.reply_text(
-            "📝 *مولّد المدونات الشهرية للحج والعمرة*\n\n⏳ جارٍ إعداد تحليل شهري شامل...\n📊 سيتم تحليل أخبار الحج والعمرة لآخر سنة\n⏰ الزمن المتوقع: 5–10 دقائق\n\nيرجى الانتظار...",
+            "📝 *مولّد المدونات الشهرية للأسرة والمجتمع*\n\n⏳ جارٍ إعداد تحليل شهري شامل...\n📊 سيتم تحليل أخبار الأسرة والمجتمع لآخر سنة\n⏰ الزمن المتوقع: 5–10 دقائق\n\nيرجى الانتظار...",
             parse_mode='Markdown'
         )
     
     try:
         await message.edit_text(
-            "📝 *الخطوة 1/4:* جلب أخبار الحج والعمرة الشهرية...\n📡 يتم الآن جمع المقالات من آخر سنة...",
+            "📝 *الخطوة 1/4:* جلب أخبار الأسرة والمجتمع الشهرية...\n📡 يتم الآن جمع المقالات من آخر سنة...",
             parse_mode='Markdown'
         )
         
-        hajgov_articles = fetch_hajgov_news() or []
-        cnn_articles = fetch_cnn_hajj_news() or []
+        hajgov_articles = fetch_family_news() or []
+        cnn_articles = []
 
         logger.info(f"Fetched {len(hajgov_articles)} haj.gov.sa, {len(cnn_articles)} CNN Arabic")
         
         await message.edit_text(
-            "📝 *الخطوة 2/4:* تصفية المقالات...\n🔍 تصفية أخبار الحج والعمرة...",
+            "📝 *الخطوة 2/4:* تصفية المقالات...\n🔍 تصفية أخبار الأسرة والمجتمع...",
             parse_mode='Markdown'
         )
         
-        # No filtering needed - sources are already Hajj-specific
+        # No filtering needed - sources are already Family-specific
 
         recent_hajgov = filter_recent_articles(hajgov_articles, days=365) or []
         recent_cnn = filter_recent_articles(cnn_articles, days=365) or []
@@ -2220,7 +2517,7 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
         
         if not all_articles:
             await message.edit_text(
-                "❌ لم يتم العثور على أخبار حج وعمرة كافية. يرجى المحاولة لاحقًا.",
+                "❌ لم يتم العثور على أخبار أسرة ومجتمع كافية. يرجى المحاولة لاحقًا.",
                 parse_mode='Markdown'
             )
             return
@@ -2249,14 +2546,14 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
         # Generate Management Blog
         management_blog = None
         if management_articles:
-            management_blog = generate_hajj_blog_with_ai(
+            management_blog = generate_family_blog_with_ai(
                 management_articles, "management", "monthly", keywords=user_keywords
             )
         
         # Generate Improvement Blog
         improvement_blog = None
         if improvement_articles:
-            improvement_blog = generate_hajj_blog_with_ai(
+            improvement_blog = generate_family_blog_with_ai(
                 improvement_articles, "improvement", "monthly", keywords=user_keywords
             )
         
@@ -2270,22 +2567,22 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
         improvement_filename = None
         
         if management_blog:
-            management_filename = create_hajj_blog_pdf(
+            management_filename = create_family_blog_pdf(
                 management_blog,
-                "التقرير الشهري للحج والعمرة",
+                "التقرير الشهري للأسرة والمجتمع",
                 is_temp_file=True
             )
         
         if improvement_blog:
-            improvement_filename = create_hajj_blog_pdf(
+            improvement_filename = create_family_blog_pdf(
                 improvement_blog,
-                "التقرير الشهري للتقنية والصحة والابتكار في الحج",
+                "التقرير الشهري للتقنية والصحة والابتكار في الأسرة والمجتمع",
                 is_temp_file=True
             )
         
         #  Step 6: Send the blog PDFs
         await message.edit_text(
-            "📝 *الخطوة 6/6:* إرسال ملفات PDF...\\n📤 يتم الآن إرسال الرؤى والتحليلات الشهرية للحج والعمرة...",
+            "📝 *الخطوة 6/6:* إرسال ملفات PDF...\\n📤 يتم الآن إرسال الرؤى والتحليلات الشهرية للأسرة والمجتمع...",
             parse_mode='Markdown'
         )
         
@@ -2294,8 +2591,8 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
                 with open(management_filename, 'rb') as pdf_file:
                     await message.reply_document(
                         document=pdf_file,
-                        filename=f"Hajj_Management_Monthly_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        caption="📝 **التقرير الشهري للحج والعمرة**\\n💼 تحليل شهري شامل لاتجاهات خدمات الحجاج وتطورات التنظيم والإدارة",
+                        filename=f"Family_Management_Monthly_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        caption="📝 **التقرير الشهري للأسرة والمجتمع**\\n💼 تحليل شهري شامل لاتجاهات شؤون الأسرة وتطورات المجتمع والقطاع غير الربحي",
                         parse_mode='Markdown'
                     )
                 os.unlink(management_filename)
@@ -2307,8 +2604,8 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
                 with open(improvement_filename, 'rb') as pdf_file:
                     await message.reply_document(
                         document=pdf_file,
-                        filename=f"Hajj_Tech_Innovation_Monthly_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        caption="📝 **التقرير الشهري للتقنية والصحة والابتكار في الحج**\\n⭐ تحليل شهري شامل لتطورات التقنية والابتكار وخدمات الضيوف",
+                        filename=f"Family_Tech_Innovation_Monthly_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        caption="📝 **التقرير الشهري للصحة والرفاهية**\\n⭐ تحليل شهري شامل لتطورات الصحة والرفاهية وجودة الحياة",
                         parse_mode='Markdown'
                     )
                 os.unlink(improvement_filename)
@@ -2320,18 +2617,18 @@ async def generate_monthly_blogs(update: Update, context: ContextTypes.DEFAULT_T
         improvement_status = "Generated" if improvement_blog else "Skipped (insufficient data)"
         
         success_message = f"""
- ✅ **تم الانتهاء من توليد المدونات الشهرية للحج والعمرة بنجاح!**
+ ✅ **تم الانتهاء من توليد المدونات الشهرية للأسرة والمجتمع بنجاح!**
 
  📊 **إحصائيات المعالجة:**
  • إجمالي المقالات التي تم تحليلها: {len(enhanced_articles)}
  • نجاح استخراج المحتوى الكامل: {enhanced_count}/{len(enhanced_articles)} ({(enhanced_count/len(enhanced_articles)*100) if enhanced_articles else 0:.1f}%)
- • عدد المقالات في مدونة خدمات الحجاج: {len(management_articles)}
+ • عدد المقالات في مدونة شؤون الأسرة: {len(management_articles)}
  • عدد المقالات في مدونة التحسين والتميز: {len(improvement_articles)}
  • نطاق التغطية الشهرية: {(datetime.now() - timedelta(days=30)).strftime('%B %d')} - {datetime.now().strftime('%B %d, %Y')}
 
  📝 **التقارير التي تم توليدها:**
- • التقرير الشهري للحج والعمرة - {management_status}
- • التقرير الشهري للتقنية والصحة والابتكار في الحج - {improvement_status}
+ • التقرير الشهري للأسرة والمجتمع - {management_status}
+ • التقرير الشهري للتقنية والصحة والابتكار في الأسرة والمجتمع - {improvement_status}
 
  كلا التقريرين يحتويان على أقسام منظمة وتحليل متعمق وتنسيق احترافي!
         """
@@ -2361,6 +2658,32 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 # AI MAGAZINE FEATURE
 # ============================================================================
+
+def fetch_images_for_articles(articles, max_articles: int = 20, timeout: int = 4):
+    """Return a list of source images for the first ``max_articles`` articles.
+
+    Uses each article's own image field when present, else scrapes its og:image.
+    Consumed by the quality_platform magazine endpoint, which assigns the returned
+    URLs round-robin to magazine articles. Skips X/Twitter URLs (no useful og:image).
+    """
+    images = []
+    for article in (articles or [])[:max_articles]:
+        if not article:
+            continue
+        img = (article.get('urlToImage') or article.get('image_url')
+               or article.get('image') or '')
+        if not img:
+            url = article.get('url', '') or ''
+            if url and 'x.com' not in url and 'twitter.com' not in url:
+                try:
+                    img = scrape_og_image(url, timeout_s=timeout)
+                except Exception:
+                    img = ''
+        if img:
+            images.append(img)
+    logger.info(f"fetch_images_for_articles: {len(images)} images for {min(len(articles or []), max_articles)} articles")
+    return images
+
 
 def scrape_og_image(article_url: str, timeout_s: int = 10) -> str:
     """
@@ -2411,7 +2734,7 @@ def scrape_og_image(article_url: str, timeout_s: int = 10) -> str:
 
 def generate_magazine_content_with_ai(articles):
     """
-    Generate structured JSON content for the monthly Hajj report using Claude.
+    Generate structured JSON content for the monthly Family report using Claude.
     Returns (magazine_data, article_map) where article_map maps 1-based index -> article metadata.
     """
     if not articles:
@@ -2442,7 +2765,7 @@ def generate_magazine_content_with_ai(articles):
         }
 
     system_message = (
-        "You are the Editor-in-Chief of a professional monthly Hajj and Umrah report. "
+        "You are the Editor-in-Chief of a professional monthly Family and Society report. "
         "Your goal is to maintain a professional, insightful, and visionary tone. "
         "Critical page layout rule: Each article (including the first one) must fit exactly on one A4 page. "
         "NO EXCEPTIONS - All 8 articles must be between 300-350 words TOTAL (Lead + Main Content). "
@@ -2457,12 +2780,12 @@ def generate_magazine_content_with_ai(articles):
     )
 
     user_prompt = f"""
-    أنشئ محتوى مجلة الحج والعمرة الشهرية بناءً على هذه المقالات:
+    أنشئ محتوى مجلة الأسرة والمجتمع الشهرية بناءً على هذه المقالات:
     {articles_context}
 
     أعد كائن JSON بهذه البنية بالضبط (بدون markdown، فقط JSON):
     {{
-        "title": "تقرير الحج والعمرة: [عنوان جذاب بالعربية]",
+        "title": "تقرير الأسرة والمجتمع: [عنوان جذاب بالعربية]",
         "subtitle": "[عنوان فرعي جذاب بالعربية]",
         "date": "[الشهر والسنة الحاليين بالعربية]",
         "highlights": [
@@ -2470,12 +2793,12 @@ def generate_magazine_content_with_ai(articles):
             {{"title": "[عنوان 2 بالعربية]", "description": "[وصف قصير بالعربية]"}},
             {{"title": "[عنوان 3 بالعربية]", "description": "[وصف قصير بالعربية]"}}
         ],
-        "editors_note": "[حد أقصى 150 كلمة بالعربية. تعليق تحريري مهني وبصيرة حول أخبار الحج والعمرة.]",
+        "editors_note": "[حد أقصى 150 كلمة بالعربية. تعليق تحريري مهني وبصيرة حول أخبار الأسرة والمجتمع.]",
         "articles": [
             {{
-                "category": "[واحدة من: خدمات الحجاج, التقنية, الصحة والسلامة, التنظيم والإدارة]",
+                "category": "[واحدة من: الأسرة والطفولة, الصحة والرفاهية, المجتمع والقطاع غير الربحي, الإحصاء والدراسات]",
                 "title": "[عنوان مجلة جذاب بالعربية]",
-                "location": "[الموقع/المنطقة بالعربية، مثال: مكة المكرمة / السعودية]",
+                "location": "[الموقع/المنطقة بالعربية، مثال: السعودية / السعودية]",
                 "lead": "[فقرة افتتاحية جذابة بالعربية، 2-3 جمل (حوالي 40-50 كلمة). عدد الكلمات هذا مشمول في إجمالي 300-350.]",
                 "content": "[المحتوى الرئيسي بتنسيق HTML بالعربية مع عناوين فرعية <h3> وفقرات <p>. عدد الكلمات الإجمالي (الافتتاحية + المحتوى) يجب أن يكون 300-350 كلمة بالضبط. المحتوى الرئيسي 250-300 كلمة. أنشئ 3-4 فقرات (حوالي 80 كلمة لكل منها) مع عنوانين فرعيين.]",
                 "article_index": "[رقم المقال الأصلي من القائمة أعلاه، مثلاً 3 أو 7]",
@@ -2585,7 +2908,7 @@ def render_newspaper_pdf(content_data, output_filename="newspaper.pdf"):
                 glob.glob(os.path.join(images_dir, '*.webp'))
             )
             # Filter out cover images
-            exclude_files = ['Cover.png', 'cover.png', 'cover_generated.png', 'back_cover_generated.png', 'Back Cover.png', 'Back Cover.jpg', 'back cover.png', '1767655448098.jpg','Logo.jpg']
+            exclude_files = ['Cover.png', 'cover.png', 'cover_generated.png', 'back_cover_generated.png', 'Back Cover.png', 'Back Cover.jpg', 'back cover.png', '1767655448098.jpg','Logo.jpg','mawadda-logo.png']
             available_images = [
                 img for img in all_images 
                 if os.path.basename(img) not in exclude_files
@@ -2612,12 +2935,12 @@ def render_newspaper_pdf(content_data, output_filename="newspaper.pdf"):
         
         # Prepare template data
         template_data = {
-            'title': content_data.get('title', 'الحج والعمرة'),
-            'publication_name': content_data.get('publication_name', 'الحج والعمرة'),
-            'tagline': content_data.get('tagline', 'مجلة إلكترونية وتعنى بكل ما هو في عالم الحج والعمرة'),
+            'title': content_data.get('title', 'الأسرة والمجتمع'),
+            'publication_name': content_data.get('publication_name', 'الأسرة والمجتمع'),
+            'tagline': content_data.get('tagline', 'مجلة إلكترونية وتعنى بكل ما هو في عالم الأسرة والمجتمع'),
             'issue_number': content_data.get('issue_number', '190'),
             'pages': pages,
-            'footer_text': content_data.get('footer_text', 'hajjnews'),
+            'footer_text': content_data.get('footer_text', 'familynews'),
             'contact_phone': content_data.get('contact_phone', '00973 3701 4477'),
             'editors_note': content_data.get('editors_note', ''),
             'cover_image_path': content_data.get('cover_image_path')
@@ -2699,7 +3022,7 @@ def render_magazine_pdf(content_data, output_filename="magazine.pdf"):
                 glob.glob(os.path.join(images_dir, '*.webp'))
             )
             # Filter out cover images and logo
-            exclude_files = ['Cover.png', 'cover.png', 'cover_generated.png', 'back_cover_generated.png', 'Back Cover.png', 'Back Cover.jpg', 'back cover.png', '1767655448098.jpg', 'TransformiX logo .png', 'Logo.jpg']
+            exclude_files = ['Cover.png', 'cover.png', 'cover_generated.png', 'back_cover_generated.png', 'Back Cover.png', 'Back Cover.jpg', 'back cover.png', '1767655448098.jpg', 'TransformiX logo .png', 'Logo.jpg', 'mawadda-logo.png']
             available_images = [
                 img for img in all_images 
                 if os.path.basename(img) not in exclude_files
@@ -2724,7 +3047,7 @@ def render_magazine_pdf(content_data, output_filename="magazine.pdf"):
         if os.path.exists(cover_path):
             content_data['cover_image_path'] = pathlib.Path(cover_path).as_uri()
             
-        logo_path = os.path.join(images_dir, 'TransformiX logo .png')
+        logo_path = os.path.join(images_dir, 'mawadda-logo.png')
         if os.path.exists(logo_path):
             content_data['logo_path'] = pathlib.Path(logo_path).as_uri()
 
@@ -2787,12 +3110,12 @@ async def generate_magazine(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
         message = await update.callback_query.message.reply_text(
-            "🎨 *مولد مجلة الحج والعمرة*\n\n⏳ جارٍ إعداد الإصدار الموسمي...\n🔍 تحليل أخبار الحج والعمرة للسنة الماضية...",
+            "🎨 *مولد مجلة الأسرة والمجتمع*\n\n⏳ جارٍ إعداد الإصدار الموسمي...\n🔍 تحليل أخبار الأسرة والمجتمع للسنة الماضية...",
             parse_mode='Markdown'
         )
     else:
         message = await update.message.reply_text(
-            "🎨 *مولد مجلة الحج والعمرة*\n\n⏳ جارٍ إعداد الإصدار الموسمي...\n🔍 تحليل أخبار الحج والعمرة للسنة الماضية...",
+            "🎨 *مولد مجلة الأسرة والمجتمع*\n\n⏳ جارٍ إعداد الإصدار الموسمي...\n🔍 تحليل أخبار الأسرة والمجتمع للسنة الماضية...",
             parse_mode='Markdown'
         )
 
@@ -2800,8 +3123,8 @@ async def generate_magazine(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 1. Fetch Monthly News
         await message.edit_text("🎨 *المرحلة 1/3:* جمع المعلومات...", parse_mode='Markdown')
         
-        hajgov_articles = fetch_hajgov_news() or []
-        cnn_articles = fetch_cnn_hajj_news() or []
+        hajgov_articles = fetch_family_news() or []
+        cnn_articles = []
 
         all_articles = clean_deduplicate_articles(hajgov_articles + cnn_articles)
         
@@ -2857,10 +3180,10 @@ async def generate_magazine(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Ensure all articles have location field (default if missing)
         for article in mag_articles:
             if 'location' not in article or not article['location']:
-                article['location'] = 'مكة المكرمة'
+                article['location'] = 'السعودية'
 
         # 3. Render PDF using NEW MAGAZINE template
-        filename = f"Hajj_Umrah_{datetime.now().strftime('%B_%Y')}.pdf"
+        filename = f"Family_Society_{datetime.now().strftime('%B_%Y')}.pdf"
         # SWITCHED from render_newspaper_pdf to render_magazine_pdf
         pdf_path = render_magazine_pdf(magazine_data, filename)
         
@@ -2868,7 +3191,7 @@ async def generate_magazine(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await message.reply_document(
                 document=open(pdf_path, 'rb'),
                 filename=filename,
-                caption=f"🎨 **مجلة الحج والعمرة - {datetime.now().strftime('%B %Y')}**\n\nاستمتع بتقريرك الموسمي!",
+                caption=f"🎨 **مجلة الأسرة والمجتمع - {datetime.now().strftime('%B %Y')}**\n\nاستمتع بتقريرك الموسمي!",
                 parse_mode='Markdown'
             )
              # Optional: os.unlink(pdf_path) if running long term
@@ -2943,40 +3266,40 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
     help_text = """
-⭐ *مساعدة بوت أخبار الحج والعمرة المحسّنة*
+⭐ *مساعدة بوت أخبار الأسرة والمجتمع المحسّنة*
 
 *🆕 المزايا المحسّنة:*
 • 📖 **استخراج كامل للمقالات** – قراءة النص الكامل للمقالات وليس الوصف فقط  
 • 🧠 **ملخصات أذكى** – تحليل يعتمد على المحتوى الكامل  
-• 📝 **توليد مدونات أسبوعية وشهرية** – تقارير معمّقة عن خدمات الحج والعمرة  
-• 🎨 **توليد مجلة الحج والعمرة الشهرية** – مجلة PDF احترافية بتصميم جميل
+• 📝 **توليد مدونات أسبوعية وشهرية** – تقارير معمّقة عن خدمات الأسرة والمجتمع  
+• 🎨 **توليد مجلة الأسرة والمجتمع الشهرية** – مجلة PDF احترافية بتصميم جميل
 • 🔍 **استخراج متعدد الأساليب** – استخدام newspaper3k و BeautifulSoup  
 • 📊 **إحصائيات المحتوى** – عرض نسبة نجاح استخراج النصوص  
-• 🎯 **فلترة موجهة للحج والعمرة** – استبعاد الأخبار الرياضية والجرائم وغير ذات الصلة
+• 🎯 **فلترة موجهة للأسرة والمجتمع** – استبعاد الأخبار الرياضية والجرائم وغير ذات الصلة
 
 *الأوامر المتاحة:*
 • `/start` – رسالة الترحيب والقائمة الرئيسية  
-• `/news` – الحصول على أخبار الحج والعمرة المحسّنة مع المحتوى الكامل  
+• `/news` – الحصول على أخبار الأسرة والمجتمع المحسّنة مع المحتوى الكامل  
 • `/categories` – تصفح الأخبار حسب التصنيف  
 • `/weekly` – توليد تقارير/مدونات أسبوعية شاملة  
 • `/monthly` – توليد تقارير/مدونات شهرية شاملة  
-• `/magazine` – توليد مجلة الحج والعمرة الشهرية احترافية (PDF)
+• `/magazine` – توليد مجلة الأسرة والمجتمع الشهرية احترافية (PDF)
 • `/keywords` – إعداد الكلمات المفتاحية الأساسية والثانوية (بالإنجليزية) لتحسين محركات البحث  
 • `/help` – عرض رسالة المساعدة هذه
 
 *كيف يعمل الاستخراج المحسّن للمحتوى:*
-1. 📡 جلب الأخبار من NewsAPI و GNews وتغذيات RSS المتخصصة  
-2. 🔍 استخراج المحتوى الكامل من الروابط  
-3. 📖 استخدام طريقتَي newspaper3k و BeautifulSoup  
-4. 🧠 تطبيق فلترة موجهة للحج والعمرة لإزالة الضجيج  
+1. 📡 جلب الأخبار من المصادر الرسمية والدولية ومنصات X وتغذيات RSS
+2. 🔍 استخراج المحتوى الكامل من الروابط
+3. 📖 استخدام طريقتَي newspaper3k و BeautifulSoup
+4. 🧠 تطبيق فلترة موجهة للأسرة والمجتمع لإزالة الضجيج
 5. 📄 إنشاء تقارير تفصيلية وملفات PDF
 
 *التصنيفات المتاحة:*
-• 📊 خدمات الحجاج  
-• 🏆 معايير ISO والشهادات  
-• ⭐ أطر التميز والجوائز  
-• 🔄 تحسين العمليات واللين  
-• 📰 أخبار عامة  
+• 👶 الأسرة والطفولة
+• 💚 الصحة والرفاهية
+• 🤝 المجتمع والقطاع غير الربحي
+• 📊 الإحصاء والدراسات
+• 📰 أخبار عامة
 
 *فوائد استخدام المحتوى الكامل:*
 • ملخصات أكثر دقة  
@@ -2998,8 +3321,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     welcome_message = """
-⭐ 👋 مرحباً بك! أنا مساعدك الإخباري الذكي لقطاع الحج والعمرة
-تم تصميمي خصيصاً لأكون رفيقك اليومي في متابعة كل ما يخص أخبار وخدمات الحج والعمرة.
+⭐ 👋 مرحباً بك! أنا مساعدك الإخباري الذكي لقطاع الأسرة والمجتمع
+تم تصميمي خصيصاً لأكون رفيقك اليومي في متابعة كل ما يخص أخبار وخدمات الأسرة والمجتمع.
 أقوم بجمع أحدث المستجدات، تحليلها، وتلخيصها لك بدقة واحترافية عالية،
 لتكون دائماً في قلب الحدث دون إهدار وقتك في البحث بين المصادر المتعددة.
 
@@ -3046,7 +3369,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 def main():
-    """Start the Hajj and Umrah news bot."""
+    """Start the Family and Society news bot."""
     # Create the Application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
@@ -3066,11 +3389,11 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Start the bot
-    print("⭐ Starting Enhanced Hajj and Umrah News Bot...")
+    print("⭐ Starting Enhanced Family and Society News Bot...")
     print("📱 Bot is ready! Send /start to begin.")
     print("✨ Enhanced features:")
     print("   • 📖 Full article content extraction")
-    print("   • 🧠 Hajj and Umrah-specific filtering")
+    print("   • 🧠 Family and Society-specific filtering")
     print("   • 📝 Weekly & monthly blog generation")
     print("   • 📄 Enhanced reports with full content")
     print("   • 🔍 Multi-method content extraction")

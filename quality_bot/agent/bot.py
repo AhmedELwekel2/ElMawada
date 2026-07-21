@@ -51,9 +51,9 @@ async def _reply(update: Update, text: str):
 
 
 _OUTPUT_META = {
-    "daily": ("Hajj_Daily_Report", "📄 *التقرير اليومي للحج والعمرة*"),
-    "combined": ("Hajj_Comprehensive_Report", "📝 *التقرير الشامل للحج والعمرة*\n💼 تحليل شامل لكافة التطورات والأخبار في قطاع الحج والعمرة"),
-    "magazine": ("Hajj_Umrah_Magazine", "📖 *مجلة الحج والعمرة الشهرية*\n\nاستمتع بتقريرك الموسمي!"),
+    "daily": ("Family_Daily_Report", "📄 *التقرير اليومي للأسرة والمجتمع*"),
+    "combined": ("Family_Comprehensive_Report", "📝 *التقرير الشامل للأسرة والمجتمع*\n💼 تحليل شامل لكافة التطورات والأخبار في شؤون الأسرة والمجتمع"),
+    "magazine": ("Family_Society_Magazine", "📖 *مجلة الأسرة والمجتمع الشهرية*\n\nاستمتع بتقريرك الشهري!"),
 }
 
 
@@ -147,7 +147,7 @@ async def news_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context, daily_graph,
         {"report_type": "daily", "category": None, "keywords": L.get_user_keywords(context)},
         "daily_news",
-        "🕋 جارٍ تجهيز موجز أخبار الحج والعمرة...\n📖 يتم الآن جمع الأخبار من وزارة الحج و CNN عربية...\n⏳ يرجى الانتظار للحظات.",
+        "🌍 جارٍ تجهيز موجز أخبار الأسرة والمجتمع...\n📖 يتم الآن جمع الأخبار من المصادر الرسمية والدولية...\n⏳ يرجى الانتظار للحظات.",
         _MAIN_MENU,
     )
 
@@ -157,7 +157,7 @@ async def weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context, periodic_graph,
         {"report_type": "weekly", "time_period": "weekly", "keywords": L.get_user_keywords(context)},
         "weekly",
-        "📝 جارٍ إعداد التقرير الأسبوعي الشامل للحج والعمرة...\n📊 سيتم تحليل أخبار آخر 7 أيام\n⏰ قد يستغرق ذلك بضع دقائق.",
+        "📝 جارٍ إعداد التقرير الأسبوعي الشامل للأسرة والمجتمع...\n📊 سيتم تحليل أخبار آخر 7 أيام\n⏰ قد يستغرق ذلك بضع دقائق.",
         _MAIN_MENU,
     )
 
@@ -167,7 +167,7 @@ async def monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context, periodic_graph,
         {"report_type": "monthly", "time_period": "monthly", "keywords": L.get_user_keywords(context)},
         "monthly",
-        "📅 جارٍ إعداد التقرير الشهري الشامل للحج والعمرة...\n⏰ قد يستغرق ذلك بضع دقائق.",
+        "📅 جارٍ إعداد التقرير الشهري الشامل للأسرة والمجتمع...\n⏰ قد يستغرق ذلك بضع دقائق.",
         _MAIN_MENU,
     )
 
@@ -177,7 +177,7 @@ async def magazine_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context, magazine_graph,
         {"report_type": "magazine"},
         "magazine",
-        "🎨 جارٍ إعداد مجلة الحج والعمرة الشهرية...\n🔍 تحليل أخبار الحج والعمرة...\n⏰ قد يستغرق ذلك بضع دقائق.",
+        "🎨 جارٍ إعداد مجلة الأسرة والمجتمع الشهرية...\n🔍 تحليل أخبار الأسرة والمجتمع...\n⏰ قد يستغرق ذلك بضع دقائق.",
         _MAIN_MENU,
     )
 
@@ -232,7 +232,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🕋 Starting LangGraph-powered Hajj & Umrah News Bot...")
+    print("🌍 Starting LangGraph-powered Family & Society News Bot...")
     print("📱 Send /start to begin.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

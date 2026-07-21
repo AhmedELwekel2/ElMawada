@@ -1,6 +1,7 @@
 python-telegram-bot>=22.0
 requests
 feedparser
+playwright
 newspaper3k
 beautifulsoup4
 readability-lxml

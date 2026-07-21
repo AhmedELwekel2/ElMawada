@@ -26,14 +26,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # NLTK tokenizer data used by article content extraction.
 RUN python -c "import nltk; nltk.download('punkt')"
 
-# Copy the whole project: telegram_bot_hajj.py + templates/ + Amiri font live at the
-# repo root, and the agent + API live under quality_bot/.
+# Playwright headless Chromium (renders the JS single-page gov sources) + its
+# system libraries. Meaningfully increases image size.
+RUN playwright install --with-deps chromium
+
+# Copy the whole project: telegram_bot_family.py + templates/ + Amiri font live at
+# the repo root, and the agent + API live under quality_bot/.
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
 # Run from quality_bot so .env and the Amiri font resolve correctly; the agent puts
-# the repo root on sys.path to import telegram_bot_hajj.
+# the repo root on sys.path to import telegram_bot_family.
 WORKDIR /app/quality_bot
 
 EXPOSE 8010

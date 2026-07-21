@@ -1,9 +1,9 @@
-"""LangGraph-based agent package for the Hajj & Umrah News Telegram bot.
+"""LangGraph-based agent package for the Family & Society News Telegram bot.
 
-The heavy domain logic (news fetching from haj.gov.sa + CNN Arabic, filtering,
-content extraction, PDF rendering, usage tracking, Arabic prompt builders)
-lives in the ``telegram_bot_hajj`` module and is imported here via
-``_legacy``. This package adds:
+The heavy domain logic (news fetching from Twitter/X + RSS + gov/international
+sites, filtering, content extraction, PDF rendering, usage tracking, Arabic
+prompt builders) lives in the ``telegram_bot_family`` module and is imported
+here via ``_legacy``. This package adds:
 
 * ``llm``    – a LangChain LLM layer (Bedrock primary, Azure Anthropic fallback)
 * ``state``  – typed graph state
@@ -12,7 +12,7 @@ lives in the ``telegram_bot_hajj`` module and is imported here via
 * ``bot``    – the Telegram layer that drives the graphs
 """
 # Load environment variables as early as possible — before ``config`` reads them
-# and before the Hajj module (which requires AWS_BEARER_TOKEN_BEDROCK at import)
+# and before the domain module (which requires AWS_BEARER_TOKEN_BEDROCK at import)
 # is loaded. This runs whenever any agent submodule is imported, regardless of
 # the current working directory (so it works under uvicorn / servers too).
 import os as _os

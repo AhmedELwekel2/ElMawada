@@ -13,9 +13,9 @@
     <div class="cover-page" {% if cover_image_path %}style="background-image: url('{{ cover_image_path }}'); background-size: cover; background-position: center;"{% else %}style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);"{% endif %}>
         <div class="cover-content-center">
             {% if logo_path %}
-            <img src="{{ logo_path }}" alt="IBDL" class="cover-logo">
+            <img src="{{ logo_path }}" alt="مركز المودة" class="cover-logo">
             {% endif %}
-            <div class="cover-title-main">{{ title or 'IBDL Monthly Report' }}</div>
+            <div class="cover-title-main">{{ title or 'مركز المودة — التقرير الشهري' }}</div>
             {% if subtitle %}
             <div class="cover-subtitle-main">{{ subtitle }}</div>
             {% endif %}
@@ -27,7 +27,7 @@
     <div class="editors-note" id="editors-note">
         {% if logo_path %}
         <div class="page-logo">
-            <img src="{{ logo_path }}" alt="IBDL" class="page-logo-img">
+            <img src="{{ logo_path }}" alt="مركز المودة" class="page-logo-img">
         </div>
         {% endif %}
         <div class="section-header">
@@ -37,7 +37,7 @@
             {{ editors_note | safe }}
         </div>
         <div style="margin-top: 1cm; font-family: 'Inter', sans-serif; font-weight: bold;">
-            — IBDL AI Bot
+            — مركز المودة
         </div>
     </div>
 
@@ -46,7 +46,7 @@
     <div class="article-page">
         {% if logo_path %}
         <div class="page-logo">
-            <img src="{{ logo_path }}" alt="IBDL" class="page-logo-img">
+            <img src="{{ logo_path }}" alt="مركز المودة" class="page-logo-img">
         </div>
         {% endif %}
         <div class="article-header">
@@ -72,7 +72,7 @@
         {% else %}
         <div class="featured-image-container featured-image-fallback">
             {% if logo_path %}
-            <img src="{{ logo_path }}" alt="IBDL" class="featured-fallback-logo">
+            <img src="{{ logo_path }}" alt="مركز المودة" class="featured-fallback-logo">
             {% endif %}
         </div>
         {% endif %}
@@ -104,7 +104,7 @@
     <div class="cover-page" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);">
         <div class="cover-content-center">
             {% if logo_path %}
-            <img src="{{ logo_path }}" alt="IBDL" class="cover-logo" style="opacity: 0.9;">
+            <img src="{{ logo_path }}" alt="مركز المودة" class="cover-logo" style="opacity: 0.9;">
             {% endif %}
             <div style="font-size: 14pt; color: white; opacity: 0.7; font-family: 'Inter', sans-serif; margin-top: 30px;">
                 Thank you for reading
