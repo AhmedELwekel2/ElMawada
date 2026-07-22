@@ -21,10 +21,78 @@ type NewsResponse = {
     articles: Article[];
 };
 
+// Lightweight Markdown → HTML renderer (headings, bold, tables, lists, blockquote,
+// hr, paragraphs). Avoids adding a dependency; tuned for RTL Arabic content.
+function renderMarkdown(md: string): string {
+    const esc = (s: string) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = (s: string) =>
+        esc(s)
+            .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+            .replace(/\*(.+?)\*/g, "<em>$1</em>")
+            .replace(/`(.+?)`/g, "<code>$1</code>");
+
+    const lines = md.replace(/\r\n/g, "\n").split("\n");
+    const html: string[] = [];
+    let i = 0;
+    let listOpen = false;
+    const closeList = () => {
+        if (listOpen) { html.push("</ul>"); listOpen = false; }
+    };
+
+    while (i < lines.length) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        // Table block
+        if (/^\|.*\|$/.test(trimmed) && i + 1 < lines.length && /^\|[\s:|-]+\|$/.test(lines[i + 1].trim())) {
+            closeList();
+            const header = trimmed.slice(1, -1).split("|").map((c) => c.trim());
+            i += 2;
+            const rows: string[][] = [];
+            while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+                rows.push(lines[i].trim().slice(1, -1).split("|").map((c) => c.trim()));
+                i++;
+            }
+            html.push('<div class="overflow-x-auto my-4"><table class="w-full border-collapse text-sm">');
+            html.push('<thead><tr>' + header.map((h) => `<th class="border border-slate-300 bg-brand-redSoft px-3 py-2 text-right font-semibold text-brand-redDark">${inline(h)}</th>`).join("") + "</tr></thead>");
+            html.push("<tbody>" + rows.map((r) => "<tr>" + r.map((c) => `<td class="border border-slate-200 px-3 py-2 text-right align-top text-slate-700">${inline(c)}</td>`).join("") + "</tr>").join("") + "</tbody>");
+            html.push("</table></div>");
+            continue;
+        }
+
+        if (/^#{1,6}\s+/.test(trimmed)) {
+            closeList();
+            const level = (trimmed.match(/^#+/) as RegExpMatchArray)[0].length;
+            const text = inline(trimmed.replace(/^#+\s+/, ""));
+            if (level === 1) html.push(`<h1 class="mt-2 mb-4 text-2xl font-extrabold text-brand-redDark border-b-2 border-brand-red/30 pb-2">${text}</h1>`);
+            else if (level === 2) html.push(`<h2 class="mt-7 mb-3 text-xl font-bold text-brand-redDark">${text}</h2>`);
+            else html.push(`<h3 class="mt-5 mb-2 text-lg font-semibold text-slate-800">${text}</h3>`);
+        } else if (/^>\s?/.test(trimmed)) {
+            closeList();
+            html.push(`<blockquote class="my-3 border-r-4 border-brand-red bg-brand-redSoft/60 px-4 py-2 text-brand-redDark font-medium rounded">${inline(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
+        } else if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+            closeList();
+            html.push('<hr class="my-6 border-slate-200" />');
+        } else if (/^[-*+]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+            if (!listOpen) { html.push('<ul class="my-3 space-y-1.5 pr-5 list-disc marker:text-brand-red">'); listOpen = true; }
+            html.push(`<li class="text-slate-700 leading-relaxed">${inline(trimmed.replace(/^([-*+]|\d+\.)\s+/, ""))}</li>`);
+        } else if (trimmed === "") {
+            closeList();
+        } else {
+            closeList();
+            html.push(`<p class="my-3 leading-relaxed text-slate-700">${inline(trimmed)}</p>`);
+        }
+        i++;
+    }
+    closeList();
+    return html.join("\n");
+}
+
     export default function Dashboard() {
     const { token, user } = useAuth();
     const router = useRouter();
-    const [activeTab, setActiveTab] = useState<"daily" | "weekly" | "monthly" | "pdf-viewer" | "reports">(
+    const [activeTab, setActiveTab] = useState<"daily" | "weekly" | "monthly" | "pdf-viewer" | "reports" | "campaign">(
         "daily",
     );
     const [data, setData] = useState<NewsResponse | null>(null);
@@ -32,7 +100,7 @@ type NewsResponse = {
     // Handle initial tab from URL query parameter
     useEffect(() => {
         const searchParams = new URLSearchParams(window.location.search);
-        const tab = searchParams.get('tab') as "daily" | "weekly" | "monthly" | "pdf-viewer" | "reports";
+        const tab = searchParams.get('tab') as "daily" | "weekly" | "monthly" | "pdf-viewer" | "reports" | "campaign";
         if (tab) {
             setActiveTab(tab);
         }
@@ -46,6 +114,8 @@ type NewsResponse = {
     const [reportsLoading, setReportsLoading] = useState(false);
     const [notifications, setNotifications] = useState<any[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
+    const [campaignLoading, setCampaignLoading] = useState(false);
+    const [campaign, setCampaign] = useState<{ title: string; date: string; articles_analyzed?: number; content: string } | null>(null);
 
     // Whenever the active tab changes, clear current data; user must click "تحديث البيانات"
     useEffect(() => {
@@ -193,6 +263,46 @@ type NewsResponse = {
             fetchReports();
         } finally {
             setMagazineLoading(false);
+        }
+    };
+
+    const handleGenerateCampaign = async () => {
+        if (user?.role !== "admin") {
+            setError("توليد الحملة التوعوية متاح للمشرف فقط.");
+            return;
+        }
+        try {
+            setError(null);
+            setCampaignLoading(true);
+            setActiveTab("campaign");
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+            };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            const res = await fetch(`${API_BASE}/api/reports/awareness-campaign`, {
+                method: "POST",
+                headers,
+            });
+            if (!res.ok) {
+                let message = `HTTP ${res.status}`;
+                try {
+                    const json = (await res.json()) as { detail?: string };
+                    if (json?.detail) message = json.detail;
+                } catch { /* ignore */ }
+                throw new Error(message);
+            }
+            const json = await res.json();
+            setCampaign(json);
+        } catch (e: any) {
+            setError(
+                e?.message
+                    ? `خطأ أثناء توليد الحملة التوعوية: ${e.message}`
+                    : "خطأ غير متوقع أثناء توليد الحملة التوعوية",
+            );
+        } finally {
+            setCampaignLoading(false);
         }
     };
 
@@ -482,6 +592,7 @@ type NewsResponse = {
                             {activeTab === "weekly" && "الأخبار النفسية والأسرية الأسبوعية"}
                             {activeTab === "monthly" && "الأخبار النفسية والأسرية الشهرية"}
                             {activeTab === "reports" && "توليد تقارير بالذكاء الاصطناعي"}
+                            {activeTab === "campaign" && "الحملة التسويقية التوعوية"}
                         </h2>
                         {/* Notifications Bell */}
                         <div className="relative">
@@ -564,6 +675,7 @@ type NewsResponse = {
                         {activeTab === "weekly" && "أحدث الممارسات والرؤى في الأسرة والمجتمع والجانب النفسي."}
                         {activeTab === "monthly" && "أحدث الممارسات والرؤى في الأسرة والمجتمع والجانب النفسي."}
                         {activeTab === "reports" && "جميع تقاريرك المحفوظة مع إمكانية إدارة وتنزيل التقارير."}
+                        {activeTab === "campaign" && "استراتيجية حملة تسويقية توعوية متكاملة مستخلصة من أخبار الشهر."}
                     </p>
                     <div className="flex gap-2 text-sm text-slate-600">
                         {data && (
@@ -578,9 +690,9 @@ type NewsResponse = {
                         )}
                         <button
                             type="button"
-                            onClick={() => handleFetch(activeTab === "pdf-viewer" || activeTab === "reports" ? "daily" : activeTab)}
+                            onClick={() => handleFetch(activeTab === "pdf-viewer" || activeTab === "reports" || activeTab === "campaign" ? "daily" : activeTab)}
                             className="rounded-full bg-brand-red px-4 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-brand-redDark disabled:cursor-not-allowed disabled:opacity-60"
-                            disabled={loading || activeTab === "pdf-viewer" || activeTab === "reports"}
+                            disabled={loading || activeTab === "pdf-viewer" || activeTab === "reports" || activeTab === "campaign"}
                         >
                             {loading ? "جارٍ التحديث..." : "جلب من قاعدة البيانات"}
                         </button>
@@ -713,7 +825,7 @@ type NewsResponse = {
                                 </div>
                             </div>
                         )}
-                        <div className="grid gap-4 md:grid-cols-4">
+                        <div className={`grid gap-4 ${user?.role === "admin" ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
                             <button
                                 onClick={() => handleGeneratePersistentReport("daily")}
                                 className="rounded-lg border border-slate-200 bg-white p-4 text-center shadow-sm transition hover:shadow-md"
@@ -746,6 +858,17 @@ type NewsResponse = {
                                 <h3 className="font-semibold text-slate-900">مجلة شهرية</h3>
                                 <p className="text-xs text-slate-600">إنشاء مجلة شهرية محفوظة</p>
                             </button>
+                            {user?.role === "admin" && (
+                                <button
+                                    onClick={handleGenerateCampaign}
+                                    disabled={campaignLoading}
+                                    className="rounded-lg border border-brand-red/30 bg-brand-redSoft p-4 text-center shadow-sm transition hover:shadow-md disabled:opacity-60"
+                                >
+                                    <div className="mb-2 text-2xl">📣</div>
+                                    <h3 className="font-semibold text-brand-redDark">حملة توعية</h3>
+                                    <p className="text-xs text-slate-600">{campaignLoading ? "جارٍ التوليد..." : "استراتيجية تسويقية من أخبار الشهر"}</p>
+                                </button>
+                            )}
                         </div>
 
                         <div className="rounded-lg border border-slate-200 bg-white p-6">
@@ -842,6 +965,66 @@ type NewsResponse = {
                                 </div>
                             )}
                         </div>
+                    </section>
+                )}
+                {/* Awareness Campaign Tab */}
+                {activeTab === "campaign" && (
+                    <section className="space-y-4">
+                        {campaignLoading && (
+                            <div className="flex h-64 flex-col items-center justify-center gap-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                                <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-red border-t-transparent" />
+                                <p className="text-sm text-slate-600">جارٍ تحليل أخبار الشهر وبناء الاستراتيجية التسويقية... قد يستغرق ذلك دقيقة إلى ثلاث دقائق.</p>
+                            </div>
+                        )}
+
+                        {!campaignLoading && !campaign && !error && (
+                            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                                <div className="mb-3 text-4xl">📣</div>
+                                <p className="text-slate-600">اضغط زر «حملة توعية» في تبويب توليد التقارير لبناء الاستراتيجية.</p>
+                                <button
+                                    onClick={handleGenerateCampaign}
+                                    className="mt-4 rounded-full bg-brand-red px-5 py-2 text-sm font-medium text-white hover:bg-brand-redDark"
+                                >
+                                    توليد الحملة الآن
+                                </button>
+                            </div>
+                        )}
+
+                        {!campaignLoading && campaign && (
+                            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ring-1 ring-slate-900/5">
+                                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/60 px-6 py-4">
+                                    <div className="flex items-center gap-3">
+                                        <img src="/mawadda-logo.png" alt="شعار مركز المودة" className="h-10 w-10 object-contain" />
+                                        <div>
+                                            <h3 className="text-lg font-bold text-brand-redDark">{campaign.title}</h3>
+                                            <p className="text-xs text-slate-500">
+                                                {new Date(campaign.date).toLocaleDateString("ar-SA", { dateStyle: "long" })}
+                                                {typeof campaign.articles_analyzed === "number" && ` • تحليل ${campaign.articles_analyzed} مقالاً`}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={handleGenerateCampaign}
+                                            className="rounded-lg bg-brand-red px-4 py-2 text-sm font-medium text-white hover:bg-brand-redDark"
+                                        >
+                                            إعادة التوليد
+                                        </button>
+                                        <button
+                                            onClick={() => { window.print(); }}
+                                            className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200"
+                                        >
+                                            طباعة / حفظ PDF
+                                        </button>
+                                    </div>
+                                </div>
+                                <article
+                                    className="px-6 py-6 sm:px-10 sm:py-8 leading-relaxed"
+                                    dir="rtl"
+                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(campaign.content) }}
+                                />
+                            </div>
+                        )}
                     </section>
                 )}
             </main>

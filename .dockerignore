@@ -2,6 +2,11 @@
 .git
 .gitignore
 
+# Node (frontend) — keeps the repo-root build context small for the backend image
+**/node_modules
+**/.next
+**/out
+
 # Python
 __pycache__
 *.pyc

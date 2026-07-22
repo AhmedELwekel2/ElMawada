@@ -1,0 +1,19 @@
+# Deps & build output — reinstalled/rebuilt inside the image.
+# Critical: host node_modules are win32 binaries; copying them over the
+# Linux install from `npm ci` breaks the build.
+node_modules
+.next
+out
+
+# Local env (the API URL is baked via the NEXT_PUBLIC_API_URL build arg instead)
+.env
+.env*.local
+
+# Misc
+npm-debug.log*
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+.DS_Store

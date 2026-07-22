@@ -19,18 +19,21 @@ USAGE_LIMITS = {
         "weekly": 20,
         "monthly": 15,
         "magazine": 10,
+        "awareness": 15,
     },
     "editor": {
         "daily": 4,
         "weekly": 4,
         "monthly": 4,
         "magazine": 2,
+        "awareness": 4,
     },
     "viewer": {
         "daily": 4,
         "weekly": 4,
         "monthly": 4,
         "magazine": 2,
+        "awareness": 4,
     }
 }
 

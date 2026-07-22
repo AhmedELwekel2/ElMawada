@@ -51,6 +51,7 @@ from telegram_bot_family import (  # type: ignore
     generate_magazine_content_with_ai,
     render_magazine_pdf,
     fetch_images_for_articles,
+    generate_awareness_campaign_with_ai,
 )
 
 # Imports from current module
@@ -915,6 +916,52 @@ def generate_monthly_blog_report(
         return JSONResponse(status_code=500, content={"detail": f"خطأ غير متوقع أثناء توليد التقرير الشهري: {e}"})
 
 
+@app.post("/api/reports/awareness-campaign")
+def generate_awareness_campaign(
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Generate a full marketing awareness-campaign strategy from the month's news
+    and return it directly as Markdown (rendered in the website, no PDF). Admin only."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="توليد الحملة التوعوية متاح للمشرف فقط.")
+
+    today = datetime.utcnow()
+    last_month = today - timedelta(days=30)
+    db_articles = db.query(Article).filter(
+        Article.is_relevant.isnot(False),
+        (Article.published_at >= last_month) | (Article.created_at >= last_month)
+    ).all()
+
+    all_articles = [_article_to_dict(a) for a in db_articles]
+    if not all_articles:
+        raise HTTPException(status_code=500, detail="لم يتم العثور على مقالات كافية للشهر الماضي لتوليد حملة توعوية.")
+
+    filtered = filter_relevant_articles(all_articles)
+    recent = filter_recent_articles(filtered, days=30)
+    if not recent:
+        raise HTTPException(status_code=500, detail="لم يتم العثور على مقالات ملائمة للشهر الماضي بعد الفلترة.")
+
+    enhanced = enhance_articles_with_content(recent, max_articles=80, monthly_mode=True)
+    if not enhanced:
+        raise HTTPException(status_code=500, detail="لم يتم العثور على مقالات كافية لتوليد الحملة التوعوية.")
+
+    try:
+        campaign = generate_awareness_campaign_with_ai(enhanced)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"تعذّر توليد الحملة التوعوية: {e}")
+
+    if not campaign or "حدث خطأ" in campaign or len(campaign.strip()) < 200:
+        raise HTTPException(status_code=500, detail="تعذّر توليد محتوى الحملة التوعوية بالذكاء الاصطناعي.")
+
+    return {
+        "title": "الحملة التسويقية التوعوية — الجانب النفسي للأسرة والمجتمع",
+        "date": today.strftime("%Y-%m-%d"),
+        "articles_analyzed": len(enhanced),
+        "content": campaign,
+    }
+
+
 @app.post("/api/reports/magazine")
 def generate_magazine_report(
     current_user: dict = Depends(check_pdf_generation_limit("magazine")),
@@ -963,7 +1010,7 @@ def generate_magazine_report(
         enhanced = enhance_articles_with_content(recent, max_articles=40, monthly_mode=True)
 
         # Generate magazine content using AI
-        magazine_data = generate_magazine_content_with_ai(enhanced)
+        magazine_data, _article_map = generate_magazine_content_with_ai(enhanced)
         if not magazine_data:
             # Update report status to failed
             report.status = "failed"
@@ -1160,22 +1207,30 @@ async def generate_persistent_report(
 ):
     """Generate report and save it persistently"""
     try:
+        # Awareness-campaign generation is restricted to admins.
+        if report_type == "awareness" and current_user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="توليد الحملة التوعوية متاح للمشرف فقط."
+            )
+
         # Manually check PDF generation limit using path parameter
         limit_checker = check_pdf_generation_limit(report_type)
         current_user = limit_checker(current_user=current_user, db=db)
-        
+
         # Manually increment PDF usage
         increment_fn = increment_pdf_usage(report_type)
         increment_fn(current_user=current_user, db=db)
-        
+
         user_id = current_user["id"]
-        
+
         # Create initial report record with pending status
         title_map = {
             "daily": "التقرير اليومي للأسرة والمجتمع (الجانب النفسي)",
             "weekly": "التقرير الأسبوعي للأسرة والمجتمع (الجانب النفسي)",
             "monthly": "التقرير الشهري للأسرة والمجتمع (الجانب النفسي)",
-            "magazine": "مجلة الأسرة والمجتمع"
+            "magazine": "مجلة الأسرة والمجتمع",
+            "awareness": "خطة حملة توعوية — الجانب النفسي للأسرة والمجتمع"
         }
         
         title = title_map.get(report_type, f"تقرير {report_type}")
@@ -1226,6 +1281,8 @@ def _generate_report_background(db: Session, user_id: int, report_id: int, repor
             pdf_path = _generate_monthly_pdf(db, title)
         elif report_type == "magazine":
             pdf_path = _generate_magazine_pdf(db, title)
+        elif report_type == "awareness":
+            pdf_path = _generate_awareness_pdf(db, title)
         else:
             raise ValueError(f"نوع التقرير غير معروف: {report_type}")
         
@@ -1381,6 +1438,38 @@ def _generate_monthly_pdf(db: Session, title: str) -> str:
 
     return create_quality_blog_pdf(combined_blog, title, is_temp_file=False)
 
+def _generate_awareness_pdf(db: Session, title: str) -> str:
+    """Generate an awareness-campaign (حملة توعية) plan PDF from the month's news.
+
+    Reuses the monthly article window: extracts the most important psychological
+    family/society topics and produces an actionable awareness-campaign plan.
+    """
+    today = datetime.utcnow()
+    last_month = today - timedelta(days=30)
+    db_articles = db.query(Article).filter(
+        Article.is_relevant.isnot(False),
+        (Article.published_at >= last_month) | (Article.created_at >= last_month)
+    ).all()
+
+    all_articles = [_article_to_dict(a) for a in db_articles]
+    if not all_articles:
+        raise Exception("لم يتم العثور على مقالات كافية للشهر الماضي لتوليد حملة توعوية.")
+
+    filtered = filter_relevant_articles(all_articles)
+    recent = filter_recent_articles(filtered, days=30)
+    if not recent:
+        raise Exception("لم يتم العثور على مقالات ملائمة للشهر الماضي بعد الفلترة.")
+
+    enhanced = enhance_articles_with_content(recent, max_articles=80, monthly_mode=True)
+    if not enhanced:
+        raise Exception("لم يتم العثور على مقالات كافية لتوليد الحملة التوعوية.")
+
+    campaign = generate_awareness_campaign_with_ai(enhanced)
+    if not campaign or "حدث خطأ" in campaign or len(campaign.strip()) < 200:
+        raise Exception("تعذّر توليد محتوى الحملة التوعوية بالذكاء الاصطناعي.")
+
+    return create_quality_blog_pdf(campaign, title, is_temp_file=False)
+
 def _generate_magazine_pdf(db: Session, title: str) -> str:
     """Generate magazine PDF"""
     today = datetime.utcnow()
@@ -1400,7 +1489,7 @@ def _generate_magazine_pdf(db: Session, title: str) -> str:
         raise Exception("لم يتم العثور على مقالات ملائمة للشهر الماضي بعد الفلترة.")
 
     enhanced = enhance_articles_with_content(recent, max_articles=40, monthly_mode=True)
-    magazine_data = generate_magazine_content_with_ai(enhanced)
+    magazine_data, _article_map = generate_magazine_content_with_ai(enhanced)
     if not magazine_data:
         raise Exception("فشل توليد محتوى المجلة بواسطة الذكاء الاصطناعي.")
 

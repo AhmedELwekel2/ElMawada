@@ -2296,6 +2296,136 @@ Content: {full_content or 'No content available'}
     else:
         return content
 
+
+def generate_awareness_campaign_with_ai(articles, keywords=None):
+    """Generate an awareness-campaign (حملة توعية) action plan from the month's news.
+
+    Extracts the most important psychological/family topics from the supplied
+    articles (typically the monthly report set) and returns a structured Arabic
+    Markdown plan for a public-awareness campaign. Returns a Markdown string.
+    """
+
+    if not articles:
+        logger.warning("No articles provided to generate_awareness_campaign_with_ai")
+        return "تعذّر إنشاء خطة الحملة التوعوية: لا توجد مقالات كافية للتحليل."
+
+    # Prepare content from articles (use up to 40 for a monthly signal)
+    news_content = ""
+    article_count = min(len(articles), 40)
+
+    for i, article in enumerate(articles[:article_count], 1):
+        if not article:
+            continue
+        title = article.get('title', 'No title')
+        source = article.get('source', {}).get('name', 'Unknown source') if article.get('source') else 'Unknown source'
+        full_content = article.get('full_content', article.get('description', 'No content'))
+        published_date = article.get('publishedAt', 'Unknown date')
+
+        if full_content and len(full_content) > 500:
+            full_content = full_content[:500] + "..."
+
+        news_content += f"""
+ARTICLE {i}:
+Title: {title}
+Source: {source}
+Date: {published_date}
+Content: {full_content or 'No content available'}
+---
+"""
+
+    system_message = (
+        "You are a senior marketing & communications strategist (Chief Marketing Officer level) "
+        "for a Family & Society counseling center (مركز المودة للإرشاد الأسري وفض النزاعات). "
+        "You build complete, professional MARKETING CAMPAIGN STRATEGIES for public-awareness "
+        "campaigns focused on the PSYCHOLOGICAL wellbeing of families and society in the "
+        "Saudi/Arab context — covering situation analysis, positioning, creative concept, "
+        "messaging architecture, channel & media plan, content calendar, budget allocation, "
+        "KPIs, and risk management. You always write in MODERN STANDARD ARABIC, use clear "
+        "Markdown headings and tables, and produce concrete, boardroom-ready plans."
+    )
+
+    keyword_guidance = build_keyword_instruction_block(keywords)
+
+    user_prompt = f"""
+    {keyword_guidance}
+
+    حلّل مجموعة الأخبار التالية المستخلصة من أخبار الشهر (الجانب النفسي للأسرة والمجتمع)،
+    واستخرج منها أهم الموضوعات والقضايا المتكررة، ثم صمّم بناءً عليها **استراتيجية حملة تسويقية
+    توعوية متكاملة واحترافية** جاهزة للعرض على مجلس الإدارة. استخدم البنية التالية **بالضبط**
+    باستخدام Markdown (استعمل الجداول حيثما يناسب):
+
+    # الحملة التسويقية التوعوية: [اسم إبداعي جذّاب للحملة مستوحى من أبرز موضوع]
+    > **الشعار (Slogan):** [شعار قصير مؤثر يُستخدم في كل مواد الحملة]
+
+    ## ١. الملخص التنفيذي
+    [120–150 كلمة توجز فكرة الحملة، ومبررها، وجمهورها، والنتيجة المرجوّة]
+
+    ## ٢. تحليل الوضع الراهن (استنادًا إلى أخبار الشهر)
+    [أبرز 3–5 موضوعات/قضايا نفسية-أسرية تكررت في الأخبار، مع ربط كل موضوع بما ورد فعليًا في الأخبار]
+
+    ## ٣. تحليل SWOT
+    [جدول من أربع خانات: نقاط القوة، نقاط الضعف، الفرص، التهديدات — من منظور المركز والحملة]
+
+    ## ٤. الجمهور المستهدف (Personas)
+    [عرّف 2–3 شخصيات جمهور بالتفصيل: العمر، الحالة، الاحتياج النفسي، السلوك الرقمي، الرسالة الملائمة لكل شخصية]
+
+    ## ٥. أهداف الحملة (SMART)
+    [3–5 أهداف ذكية قابلة للقياس مع أرقام مستهدفة وإطار زمني]
+
+    ## ٦. التموضع والفكرة الإبداعية الكبرى (Positioning & Big Idea)
+    [عبارة التموضع، والفكرة الإبداعية المحورية التي توحّد الحملة، ونبرة الخطاب]
+
+    ## ٧. معمارية الرسائل (Messaging Pillars)
+    [3–4 محاور رسائل رئيسية، وتحت كل محور رسائل فرعية قصيرة قابلة للاستخدام في المحتوى]
+
+    ## ٨. الاستراتيجية الإبداعية والمحتوى
+    [أنواع المحتوى: فيديوهات قصيرة، إنفوجرافيك، قصص نجاح، بثّ مباشر، ورش، بودكاست — مع أمثلة عناوين/أفكار محتوى ملموسة]
+
+    ## ٩. خطة القنوات والوسائط (Channel & Media Plan)
+    [جدول: القناة | الهدف منها | نوع المحتوى | التكرار | مؤشر الأداء — يشمل السوشيال ميديا، المساجد، المدارس، الإعلام، الشراكات]
+
+    ## ١٠. التقويم الزمني للحملة (Content Calendar)
+    [جدول خطة 4–6 أسابيع: الأسبوع | المحور | الأنشطة | القنوات | المخرجات]
+
+    ## ١١. الميزانية التقديرية وتوزيعها
+    [جدول بنود الصرف الرئيسية ونِسَب توزيع الميزانية التقديرية (نسب مئوية) بين الإنتاج والإعلانات المدفوعة والفعاليات والشراكات]
+
+    ## ١٢. الشراكات والمؤثرون
+    [جهات حكومية/مجتمعية للتعاون، ونوع المؤثرين المناسبين (مختصون نفسيون، دعاة أسريون) ودورهم]
+
+    ## ١٣. مؤشرات قياس الأداء (KPIs)
+    [جدول: المؤشر | القيمة المستهدفة | أداة القياس]
+
+    ## ١٤. إدارة المخاطر والاستدامة
+    [أبرز المخاطر المحتملة وسبل معالجتها، وكيف تُستدام آثار الحملة بعد انتهائها]
+
+    متطلبات أساسية:
+    - يجب استخدام عناوين الأقسام العربية أعلاه كما هي مع تنسيق Markdown (##)، واستخدم جداول Markdown في الأقسام المطلوبة.
+    - يجب أن يكون تحليل الوضع والموضوعات نابعًا فعليًا من الأخبار المرفقة، لا موضوعات عامة.
+    - ركّز على الجانب النفسي والعلاقات الأسرية والصحة النفسية المجتمعية.
+    - اجعل الاستراتيجية عملية وواقعية واحترافية وقابلة للتنفيذ من قبل مركز إرشاد أسري.
+    - أمامك {article_count} مقالًا، فاستند إليها في التحليل.
+
+    محتوى الأخبار للتحليل ({article_count} مقالاً):
+    {news_content}
+
+    اكتب الاستراتيجية باللغة العربية الفصحى فقط، بدون أي فقرات باللغة الإنجليزية (باستثناء المصطلحات التسويقية بين قوسين).
+    """
+
+    content, error = call_claude_api(
+        system_message=system_message,
+        user_message=user_prompt,
+        max_tokens=6000,
+        temperature=0.6,
+        use_cache=True,
+        use_long_timeout=True
+    )
+
+    if error:
+        return f"حدث خطأ أثناء توليد خطة الحملة التوعوية: {error}"
+    return content
+
+
 async def generate_weekly_blogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate comprehensive weekly Family and Society blog posts."""
     user_id = get_user_id(update)
@@ -2834,11 +2964,11 @@ def generate_magazine_content_with_ai(articles):
     if error:
         logger.error(f"Magazine generation error (AWS Bedrock): {error}")
         logger.error(f"Error type: {type(error)}")
-        return None
+        return None, {}
 
     if not content_text:
         logger.error("Magazine generation returned empty content")
-        return None
+        return None, {}
 
     try:
         # Clean potential markdown fences
@@ -2858,7 +2988,7 @@ def generate_magazine_content_with_ai(articles):
         if not json_str.endswith('}'):
             logger.warning("JSON response appears to be truncated (doesn't end with })")
             logger.error(f"JSON string ending: ...{json_str[-200:]}")
-            return None
+            return None, {}
         
         magazine_data = json.loads(json_str)
         return magazine_data, article_map
